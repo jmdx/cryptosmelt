@@ -13,7 +13,7 @@ struct Miner {
   miner_id: String,
   login: String,
   password: String,
-  ip: String,
+  peer_addr: Option<SocketAddr>,
   difficulty: u64,
 }
 
@@ -23,20 +23,26 @@ impl Miner {
   }
 }
 
+#[derive(Default, Clone)]
+struct Meta {
+  peer_addr: Option<SocketAddr>
+}
+impl Metadata for Meta {}
+
 struct PoolServer {
-  _miner_connections: ConcHashMap<String, Miner>
+  miner_connections: ConcHashMap<String, Miner>
 }
 
 impl PoolServer {
   fn new()-> PoolServer {
     PoolServer {
-      _miner_connections: Default::default()
+      miner_connections: Default::default()
     }
   }
 
   fn getminer(&self, params: Map<String, Value>) -> Option<&Miner> {
     if let Some(&Value::String(ref id)) = params.get("id") {
-      if let Some(miner) = self._miner_connections.find(id) {
+      if let Some(miner) = self.miner_connections.find(id) {
         let miner: &Miner = miner.get();
         Some(miner)
       } else {
@@ -56,7 +62,7 @@ impl PoolServer {
     }
   }
 
-  fn login(&self, params: Map<String, Value>) -> Result<Value> {
+  fn login(&self, params: Map<String, Value>, meta: Meta) -> Result<Value> {
     if let Some(&Value::String(ref login)) = params.get("login") {
       let mut response: Map<String, Value> = Map::new();
       let id = &Uuid::new_v4().to_string();
@@ -66,14 +72,13 @@ impl PoolServer {
         login: login.to_owned(),
         // TODO password isn't used, should probably go away
         password: "".to_owned(),
-        ip: "".to_owned(),
+        peer_addr: meta.peer_addr,
         // TODO implement variable, configurable, fixed difficulties
         difficulty: 20000,
       };
-      self._miner_connections.insert(id.to_owned(), miner);
+      self.miner_connections.insert(id.to_owned(), miner);
       Ok(Value::Object(response))
-    }
-    else {
+    } else {
       Err(Error::invalid_params("Login address required"))
     }
   }
@@ -81,14 +86,14 @@ impl PoolServer {
 
 // TODO probably take in a difficulty here
 pub fn init(port: u16) {
-  let mut io = IoHandler::new();
+  let mut io = MetaIoHandler::default();
   //let mut pool_server: PoolServer = PoolServer::new();
   let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
   let login_ref = pool_server.clone();
-  io.add_method("login", move |params| {
+  io.add_method_with_meta("login", move |params, meta: Meta| {
     // TODO repeating this match isn't pretty
     match params {
-      Params::Map(map) => login_ref.login(map),
+      Params::Map(map) => login_ref.login(map, meta),
       _ => Err(Error::invalid_params("Expected a params map")),
     }
   });
@@ -113,6 +118,11 @@ pub fn init(port: u16) {
   });
 
   let server = ServerBuilder::new(io)
+    .session_meta_extractor(|context: &RequestContext| {
+      Meta {
+        peer_addr: Some(context.peer_addr)
+      }
+    })
     .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), port))
     .unwrap();
 
