@@ -8,6 +8,7 @@ extern crate jsonrpc_tcp_server;
 extern crate concurrent_hashmap;
 extern crate uuid;
 extern crate reqwest;
+extern crate schedule_recv;
 
 
 mod config;
@@ -15,5 +16,5 @@ mod server;
 
 fn main() {
   let config = config::read_config();
-  server::init(11337, config.daemon_url);
+  server::init(11337, config.daemon_url, config.pool_wallet);
 }

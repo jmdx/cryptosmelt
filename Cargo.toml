@@ -11,6 +11,7 @@ serde = "1.0"
 jsonrpc-core = "8.0"
 jsonrpc-tcp-server = "8.0"
 reqwest = "0.8"
+schedule_recv = "0.1.0"
 
 [dependencies.uuid]
 version = "0.4"

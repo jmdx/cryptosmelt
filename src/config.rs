@@ -6,6 +6,7 @@ use toml;
 pub struct Config {
   // TODO there will need to be both a wallet and a daemon address
   pub daemon_url: String,
+  pub pool_wallet: String,
 }
 
 pub fn read_config() -> Config {

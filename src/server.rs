@@ -2,11 +2,12 @@ use jsonrpc_core::*;
 use jsonrpc_core::serde_json::{Map};
 use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use concurrent_hashmap::*;
-use std::collections::*;
 use uuid::*;
 use reqwest;
+use schedule_recv::periodic_ms;
+use std::thread;
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
@@ -92,7 +93,7 @@ impl PoolServer {
 
 // TODO this will probably go in another file
 fn call_daemon(daemon_url: &str, method: &str, params: Value)
-               -> reqwest::Result<HashMap<String, String>> {
+               -> reqwest::Result<Value> {
   let mut map = Map::new();
   map.insert("jsonrpc".to_owned(), Value::String("2.0".to_owned()));
   map.insert("id".to_owned(), Value::String("0".to_owned()));
@@ -107,12 +108,13 @@ fn call_daemon(daemon_url: &str, method: &str, params: Value)
 }
 
 // TODO probably take in a difficulty here
-pub fn init(port: u16, daemon_url: String) {
+pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
   // TODO take in 2 structs, ServerConfig and GlobalConfig
   let mut io = MetaIoHandler::default();
   //let mut pool_server: PoolServer = PoolServer::new();
   let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
   let login_ref = pool_server.clone();
+  let block_template: Arc<Mutex<Value>> = Arc::new(Mutex::new(Value::default()));
   io.add_method_with_meta("login", move |params, meta: Meta| {
     // TODO repeating this match isn't pretty
     match params {
@@ -140,15 +142,6 @@ pub fn init(port: u16, daemon_url: String) {
     Ok(Value::String("hello".to_owned()))
   });
 
-  // TODO make wallet_address configurable
-  let params = json!({
-    "wallet_address": "",
-    "reserve_size": 8
-  });
-  // TODO convert a lot of other stuff to the json! macro
-  println!("params: {}", params.to_string());
-  let _info = call_daemon(&daemon_url, "getblocktemplate", params);
-
   let server = ServerBuilder::new(io)
     .session_meta_extractor(|context: &RequestContext| {
       Meta {
@@ -157,6 +150,26 @@ pub fn init(port: u16, daemon_url: String) {
     })
     .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), port))
     .unwrap();
-
+  // TODO make sure we refresh the template after every successful submit
+  let template_refresh_ref = block_template.clone();
+  thread::spawn(move || {
+    // TODO maybe configurable block refresh interval
+    let tick = periodic_ms(10000);
+    loop {
+      tick.recv().unwrap();
+      // TODO make wallet_address configurable
+      let params = json!({
+        "wallet_address": pool_wallet,
+        "reserve_size": 8
+      });
+      // TODO convert a lot of other stuff to the json! macro
+      let template = call_daemon(&daemon_url, "getblocktemplate", params);
+      match template {
+        Ok(template) => *template_refresh_ref.lock().unwrap() = template,
+        Err(message) => println!("Failed to get new block template: {}", message)
+      }
+      println!("New block template: {}", template_refresh_ref.lock().unwrap().to_string());
+    }
+  });
   server.wait();
 }
