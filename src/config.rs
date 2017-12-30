@@ -4,7 +4,8 @@ use toml;
 
 #[derive(Deserialize)]
 pub struct Config {
-  pub daemon: String,
+  // TODO there will need to be both a wallet and a daemon address
+  pub daemon_url: String,
 }
 
 pub fn read_config() -> Config {

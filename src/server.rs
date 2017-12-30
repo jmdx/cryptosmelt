@@ -4,7 +4,9 @@ use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use concurrent_hashmap::*;
+use std::collections::*;
 use uuid::*;
+use reqwest;
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
@@ -19,7 +21,7 @@ struct Miner {
 
 impl Miner {
   fn getjob(&self) -> String {
-    "TODO write getjob".to_owned()
+    "TODO write getjob, this will need to return a Map".to_owned()
   }
 }
 
@@ -30,6 +32,7 @@ struct Meta {
 impl Metadata for Meta {}
 
 struct PoolServer {
+  // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>
 }
 
@@ -66,6 +69,7 @@ impl PoolServer {
     if let Some(&Value::String(ref login)) = params.get("login") {
       let mut response: Map<String, Value> = Map::new();
       let id = &Uuid::new_v4().to_string();
+      // TODO add some validation on the login address
       response.insert("id".to_owned(), Value::String(id.to_owned()));
       let miner = Miner {
         miner_id: id.to_owned(),
@@ -76,6 +80,8 @@ impl PoolServer {
         // TODO implement variable, configurable, fixed difficulties
         difficulty: 20000,
       };
+      response.insert("job".to_owned(), Value::String(miner.getjob()));
+      response.insert("status".to_owned(), Value::String("OK".to_owned()));
       self.miner_connections.insert(id.to_owned(), miner);
       Ok(Value::Object(response))
     } else {
@@ -84,8 +90,25 @@ impl PoolServer {
   }
 }
 
+// TODO this will probably go in another file
+fn call_daemon(daemon_url: &str, method: &str, params: Value)
+               -> reqwest::Result<HashMap<String, String>> {
+  let mut map = Map::new();
+  map.insert("jsonrpc".to_owned(), Value::String("2.0".to_owned()));
+  map.insert("id".to_owned(), Value::String("0".to_owned()));
+  map.insert("method".to_owned(), Value::String(method.to_owned()));
+  map.insert("params".to_owned(), params);
+
+  let client = reqwest::Client::new();
+  let mut res = client.post(daemon_url)
+    .json(&map)
+    .send()?;
+  res.json()
+}
+
 // TODO probably take in a difficulty here
-pub fn init(port: u16) {
+pub fn init(port: u16, daemon_url: String) {
+  // TODO take in 2 structs, ServerConfig and GlobalConfig
   let mut io = MetaIoHandler::default();
   //let mut pool_server: PoolServer = PoolServer::new();
   let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
@@ -116,6 +139,15 @@ pub fn init(port: u16) {
   io.add_method("keepalived", |_params| {
     Ok(Value::String("hello".to_owned()))
   });
+
+  // TODO make wallet_address configurable
+  let params = json!({
+    "wallet_address": "",
+    "reserve_size": 8
+  });
+  // TODO convert a lot of other stuff to the json! macro
+  println!("params: {}", params.to_string());
+  let _info = call_daemon(&daemon_url, "getblocktemplate", params);
 
   let server = ServerBuilder::new(io)
     .session_meta_extractor(|context: &RequestContext| {

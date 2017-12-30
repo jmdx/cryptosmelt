@@ -6,9 +6,11 @@ authors = ["jmdx"]
 [dependencies]
 toml = "0.4"
 serde_derive = "1.0"
+serde_json = "1.0"
 serde = "1.0"
 jsonrpc-core = "8.0"
 jsonrpc-tcp-server = "8.0"
+reqwest = "0.8"
 
 [dependencies.uuid]
 version = "0.4"
