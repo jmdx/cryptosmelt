@@ -24,7 +24,20 @@ struct Miner {
 }
 
 impl Miner {
-  fn getjob(&self, current_template: Value) -> Result<Value> {
+  /// Returns a representation of the miner's current difficulty, in a hex format which is sort of
+  /// a quirk of the stratum protocol.
+  fn get_target_hex(&self) -> String {
+    let min_diff = BigInt::parse_bytes(
+      b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16).unwrap();
+    let full_diff = min_diff.div_floor(&BigInt::from(self.difficulty));
+    let (_, full_diff_le) = full_diff.to_bytes_le();
+    let full_diff_hexes: Vec<String> = full_diff_le[(full_diff_le.len() - 3)..].iter()
+      .map(|b| format!("{:02x}", b))
+      .collect();
+    full_diff_hexes.join("") + "00"
+  }
+
+  fn get_job(&self, current_template: Value) -> Result<Value> {
     // Notes on the block template:
     // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce
     // - the daemon returns result.reserved_offset, and that many bytes into
@@ -39,19 +52,11 @@ impl Miner {
         let job_id = &Uuid::new_v4().to_string();
         // TODO remove the bytes dependency if we don't use it
         //let mut buf = BytesMut::with_capacity(128);
-        let min_diff = BigInt::parse_bytes(
-          b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16).unwrap();
-        println!("blob: {}", blob);
-        let full_diff = min_diff.div_floor(&BigInt::from(self.difficulty));
-        let (_, full_diff_le) = full_diff.to_bytes_le();
-        let full_diff_hexes: Vec<String> = full_diff_le[(full_diff_le.len() - 3)..].iter()
-          .map(|b| format!("{:02x}", b))
-          .collect();
-        let target_hex = full_diff_hexes.join("") + "00";
+        // TODO at least do something to the reserved bytes
         return Ok(json!({
           "id": job_id,
           "blob": blob,
-          "target": target_hex,
+          "target": self.get_target_hex(),
         }));
       }
     }
@@ -94,7 +99,7 @@ impl PoolServer {
 
   fn getjob(&self, params: Map<String, Value>) -> Result<Value> {
     if let Some(miner) = self.getminer(params) {
-      miner.getjob(self.block_template.lock().unwrap().clone())
+      miner.get_job(self.block_template.lock().unwrap().clone())
     }
     else {
       Err(Error::invalid_params("No miner with this ID"))
@@ -116,7 +121,7 @@ impl PoolServer {
       };
       let response = json!({
         "id": id,
-        "job": miner.getjob(self.block_template.lock().unwrap().clone())?,
+        "job": miner.get_job(self.block_template.lock().unwrap().clone())?,
         "status": "OK",
       });
       self.miner_connections.insert(id.to_owned(), miner);
@@ -211,4 +216,18 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
     }
   });
   server.wait();
+}
+
+#[test]
+fn target_hex_correct() {
+  let mut miner = Miner {
+    miner_id: String::new(),
+    login: String::new(),
+    password: String::new(),
+    peer_addr: None,
+    difficulty: 5000,
+  };
+  assert_eq!(miner.get_target_hex(), "711b0d00");
+  miner.difficulty = 20000;
+  assert_eq!(miner.get_target_hex(), "dc460300");
 }
