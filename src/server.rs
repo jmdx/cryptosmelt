@@ -13,7 +13,17 @@ use num_integer::*;
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
+struct Job {
+  id: String,
+  extra_nonce: String,
+  height: u64,
+  difficulty: u64,
+  diff_hex: String,
+  submissions: ConcHashMap<String, bool>,
+}
 
+// TODO eventually this 'allow' will need to go away
+#[allow(dead_code)]
 struct Miner {
   miner_id: String,
   login: String,
@@ -21,6 +31,7 @@ struct Miner {
   // TODO we'll probably want to just reject the case of a miner coming in without an address
   peer_addr: Option<SocketAddr>,
   difficulty: u64,
+  jobs: ConcHashMap<String, Job>,
 }
 
 impl Miner {
@@ -45,19 +56,29 @@ impl Miner {
     // - the node pools use a global counter, but we might want the counter to be per-miner
     // - it might not even be necessary to use any counters
     //   (and just go with the first 8 bytes of the miner id)
-    // TODO this is a good candidate for starting with tests
-    println!("getjob has access to: {}", current_template);
     if let Value::Object(template_data) = current_template {
       if let Some(&Value::String(ref blob)) = template_data.get("blocktemplate_blob") {
-        let job_id = &Uuid::new_v4().to_string();
-        // TODO remove the bytes dependency if we don't use it
-        //let mut buf = BytesMut::with_capacity(128);
-        // TODO at least do something to the reserved bytes
-        return Ok(json!({
-          "id": job_id,
-          "blob": blob,
-          "target": self.get_target_hex(),
-        }));
+        if let Some(&Value::Number(ref height)) = template_data.get("height") {
+          let job_id = &Uuid::new_v4().to_string();
+          // TODO remove the bytes dependency if we don't use it
+          //let mut buf = BytesMut::with_capacity(128);
+          // TODO at least do something to the reserved bytes
+          let target_hex = self.get_target_hex();
+          let new_job = Job {
+            id: job_id.to_owned(),
+            extra_nonce: String::new(),
+            height: height.as_u64().unwrap(),
+            difficulty: self.difficulty,
+            diff_hex: target_hex.to_owned(),
+            submissions: Default::default(),
+          };
+          self.jobs.insert(job_id.to_owned(), new_job);
+          return Ok(json!({
+            "id": job_id,
+            "blob": blob,
+            "target": target_hex,
+          }));
+        };
       }
     }
     Err(Error::internal_error())
@@ -118,6 +139,7 @@ impl PoolServer {
         peer_addr: meta.peer_addr,
         // TODO implement variable, configurable, fixed difficulties
         difficulty: 5000,
+        jobs: Default::default(),
       };
       let response = json!({
         "id": id,
@@ -226,6 +248,7 @@ fn target_hex_correct() {
     password: String::new(),
     peer_addr: None,
     difficulty: 5000,
+    jobs: Default::default(),
   };
   assert_eq!(miner.get_target_hex(), "711b0d00");
   miner.difficulty = 20000;
