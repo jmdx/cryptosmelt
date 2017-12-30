@@ -8,6 +8,8 @@ use uuid::*;
 use reqwest;
 use schedule_recv::periodic_ms;
 use std::thread;
+use num_bigint::*;
+use num_integer::*;
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
@@ -16,13 +18,44 @@ struct Miner {
   miner_id: String,
   login: String,
   password: String,
+  // TODO we'll probably want to just reject the case of a miner coming in without an address
   peer_addr: Option<SocketAddr>,
   difficulty: u64,
 }
 
 impl Miner {
-  fn getjob(&self) -> String {
-    "TODO write getjob, this will need to return a Map".to_owned()
+  fn getjob(&self, current_template: Value) -> Result<Value> {
+    // Notes on the block template:
+    // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce
+    // - the daemon returns result.reserved_offset, and that many bytes into
+    //   result.blocktemplate_blob, we can write our 8 byte extra nonce
+    // - the node pools use a global counter, but we might want the counter to be per-miner
+    // - it might not even be necessary to use any counters
+    //   (and just go with the first 8 bytes of the miner id)
+    // TODO this is a good candidate for starting with tests
+    println!("getjob has access to: {}", current_template);
+    if let Value::Object(template_data) = current_template {
+      if let Some(&Value::String(ref blob)) = template_data.get("blocktemplate_blob") {
+        let job_id = &Uuid::new_v4().to_string();
+        // TODO remove the bytes dependency if we don't use it
+        //let mut buf = BytesMut::with_capacity(128);
+        let min_diff = BigInt::parse_bytes(
+          b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16).unwrap();
+        println!("blob: {}", blob);
+        let full_diff = min_diff.div_floor(&BigInt::from(self.difficulty));
+        let (_, full_diff_le) = full_diff.to_bytes_le();
+        let full_diff_hexes: Vec<String> = full_diff_le[(full_diff_le.len() - 3)..].iter()
+          .map(|b| format!("{:02x}", b))
+          .collect();
+        let target_hex = full_diff_hexes.join("") + "00";
+        return Ok(json!({
+          "id": job_id,
+          "blob": blob,
+          "target": target_hex,
+        }));
+      }
+    }
+    Err(Error::internal_error())
   }
 }
 
@@ -34,13 +67,15 @@ impl Metadata for Meta {}
 
 struct PoolServer {
   // TODO there will need to be expiry here
-  miner_connections: ConcHashMap<String, Miner>
+  miner_connections: ConcHashMap<String, Miner>,
+  block_template: Mutex<Value>,
 }
 
 impl PoolServer {
   fn new()-> PoolServer {
     PoolServer {
-      miner_connections: Default::default()
+      miner_connections: Default::default(),
+      block_template: Mutex::new(Value::default())
     }
   }
 
@@ -59,7 +94,7 @@ impl PoolServer {
 
   fn getjob(&self, params: Map<String, Value>) -> Result<Value> {
     if let Some(miner) = self.getminer(params) {
-      Ok(Value::String(miner.getjob()))
+      miner.getjob(self.block_template.lock().unwrap().clone())
     }
     else {
       Err(Error::invalid_params("No miner with this ID"))
@@ -77,11 +112,11 @@ impl PoolServer {
         password: "".to_owned(),
         peer_addr: meta.peer_addr,
         // TODO implement variable, configurable, fixed difficulties
-        difficulty: 20000,
+        difficulty: 5000,
       };
       let response = json!({
         "id": id,
-        "job": miner.getjob(),
+        "job": miner.getjob(self.block_template.lock().unwrap().clone())?,
         "status": "OK",
       });
       self.miner_connections.insert(id.to_owned(), miner);
@@ -111,11 +146,11 @@ fn call_daemon(daemon_url: &str, method: &str, params: Value)
 // TODO probably take in a difficulty here
 pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
   // TODO take in 2 structs, ServerConfig and GlobalConfig
+  // TODO we'll want one PoolServer instance, multiple ports will need to reach it
   let mut io = MetaIoHandler::default();
   //let mut pool_server: PoolServer = PoolServer::new();
   let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
   let login_ref = pool_server.clone();
-  let block_template: Arc<Mutex<Value>> = Arc::new(Mutex::new(Value::default()));
   io.add_method_with_meta("login", move |params, meta: Meta| {
     // TODO repeating this match isn't pretty
     match params {
@@ -152,7 +187,7 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
     .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), port))
     .unwrap();
   // TODO make sure we refresh the template after every successful submit
-  let template_refresh_ref = block_template.clone();
+  let template_refresh_ref = pool_server.clone();
   thread::spawn(move || {
     // TODO maybe configurable block refresh interval
     let tick = periodic_ms(10000);
@@ -162,11 +197,16 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
         "reserve_size": 8
       });
       let template = call_daemon(&daemon_url, "getblocktemplate", params);
+      let mut current_template = template_refresh_ref.block_template.lock().unwrap();
       match template {
-        Ok(template) => *template_refresh_ref.lock().unwrap() = template,
+        Ok(template) => {
+          if let Some(&Value::Object(ref template_result)) = template.get("result") {
+            *current_template = Value::Object(template_result.clone())
+          }
+        },
         Err(message) => println!("Failed to get new block template: {}", message)
       }
-      println!("New block template: {}", template_refresh_ref.lock().unwrap().to_string());
+      println!("New block template: {}", current_template);
       tick.recv().unwrap();
     }
   });
