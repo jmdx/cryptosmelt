@@ -68,10 +68,8 @@ impl PoolServer {
 
   fn login(&self, params: Map<String, Value>, meta: Meta) -> Result<Value> {
     if let Some(&Value::String(ref login)) = params.get("login") {
-      let mut response: Map<String, Value> = Map::new();
       let id = &Uuid::new_v4().to_string();
       // TODO add some validation on the login address
-      response.insert("id".to_owned(), Value::String(id.to_owned()));
       let miner = Miner {
         miner_id: id.to_owned(),
         login: login.to_owned(),
@@ -81,10 +79,13 @@ impl PoolServer {
         // TODO implement variable, configurable, fixed difficulties
         difficulty: 20000,
       };
-      response.insert("job".to_owned(), Value::String(miner.getjob()));
-      response.insert("status".to_owned(), Value::String("OK".to_owned()));
+      let response = json!({
+        "id": id,
+        "job": miner.getjob(),
+        "status": "OK",
+      });
       self.miner_connections.insert(id.to_owned(), miner);
-      Ok(Value::Object(response))
+      Ok(response)
     } else {
       Err(Error::invalid_params("Login address required"))
     }
@@ -94,12 +95,12 @@ impl PoolServer {
 // TODO this will probably go in another file
 fn call_daemon(daemon_url: &str, method: &str, params: Value)
                -> reqwest::Result<Value> {
-  let mut map = Map::new();
-  map.insert("jsonrpc".to_owned(), Value::String("2.0".to_owned()));
-  map.insert("id".to_owned(), Value::String("0".to_owned()));
-  map.insert("method".to_owned(), Value::String(method.to_owned()));
-  map.insert("params".to_owned(), params);
-
+  let map = json!({
+    "jsonrpc": Value::String("2.0".to_owned()),
+    "id": Value::String("0".to_owned()),
+    "method": Value::String(method.to_owned()),
+    "params": params,
+  });
   let client = reqwest::Client::new();
   let mut res = client.post(daemon_url)
     .json(&map)
@@ -156,19 +157,17 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
     // TODO maybe configurable block refresh interval
     let tick = periodic_ms(10000);
     loop {
-      tick.recv().unwrap();
-      // TODO make wallet_address configurable
       let params = json!({
         "wallet_address": pool_wallet,
         "reserve_size": 8
       });
-      // TODO convert a lot of other stuff to the json! macro
       let template = call_daemon(&daemon_url, "getblocktemplate", params);
       match template {
         Ok(template) => *template_refresh_ref.lock().unwrap() = template,
         Err(message) => println!("Failed to get new block template: {}", message)
       }
       println!("New block template: {}", template_refresh_ref.lock().unwrap().to_string());
+      tick.recv().unwrap();
     }
   });
   server.wait();
