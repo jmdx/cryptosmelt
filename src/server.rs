@@ -36,6 +36,17 @@ fn test_hash() {
   assert_eq!(cn_hash(input, HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
 }
 
+#[derive(Deserialize, Default)]
+struct BlockTemplate {
+  blockhashing_blob: String,
+  blocktemplate_blob: String,
+  difficulty: u64,
+  height: u64,
+  prev_hash: String,
+  reserved_offset: u32,
+  status: String
+}
+
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
 struct Job {
@@ -44,8 +55,7 @@ struct Job {
   height: u64,
   difficulty: u64,
   diff_hex: String,
-  // TODO maybe make a struct to deserialize templates into
-  template: Arc<Mutex<Value>>,
+  template: Arc<Mutex<BlockTemplate>>,
   submissions: ConcHashMap<u32, bool>,
 }
 
@@ -91,7 +101,7 @@ impl Miner {
     full_diff_hexes.join("") + "00"
   }
 
-  fn get_job(&self, current_template: &Arc<Mutex<Value>>) -> Result<Value> {
+  fn get_job(&self, current_template: &Arc<Mutex<BlockTemplate>>) -> Result<Value> {
     // Notes on the block template:
     // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce
     // - the daemon returns result.reserved_offset, and that many bytes into
@@ -100,32 +110,27 @@ impl Miner {
     // - it might not even be necessary to use any counters
     //   (and just go with the first 8 bytes of the miner id)
     let arc_template = current_template.clone();
-    if let Value::Object(ref template_data) = *arc_template.lock().unwrap() {
-      if let Some(&Value::String(ref blob)) = template_data.get("blocktemplate_blob") {
-        if let Some(&Value::Number(ref height)) = template_data.get("height") {
-          let job_id = &Uuid::new_v4().to_string();
-          // TODO remove the bytes dependency if we don't use it
-          //let mut buf = BytesMut::with_capacity(128);
-          // TODO at least do something to the reserved bytes
-          let target_hex = self.get_target_hex();
-          let new_job = Job {
-            id: job_id.to_owned(),
-            extra_nonce: String::new(),
-            height: height.as_u64().unwrap(),
-            difficulty: self.difficulty,
-            diff_hex: target_hex.to_owned(),
-            template: current_template.clone(),
-            submissions: Default::default(),
-          };
-          self.jobs.insert(job_id.to_owned(), new_job);
-          return Ok(json!({
-            "id": job_id,
-            "blob": blob,
-            "target": target_hex,
-          }));
-        };
-      }
-    }
+    let template_data = arc_template.lock().unwrap();
+    let job_id = &Uuid::new_v4().to_string();
+    // TODO remove the bytes dependency if we don't use it
+    //let mut buf = BytesMut::with_capacity(128);
+    // TODO at least do something to the reserved bytes
+    let target_hex = self.get_target_hex();
+    let new_job = Job {
+      id: job_id.to_owned(),
+      extra_nonce: String::new(),
+      height: template_data.height,
+      difficulty: self.difficulty,
+      diff_hex: target_hex.to_owned(),
+      template: current_template.clone(),
+      submissions: Default::default(),
+    };
+    self.jobs.insert(job_id.to_owned(), new_job);
+    return Ok(json!({
+      "id": job_id,
+      "blob": template_data.blockhashing_blob,
+      "target": target_hex,
+    }));
     Err(Error::internal_error())
   }
 }
@@ -139,14 +144,14 @@ impl Metadata for Meta {}
 struct PoolServer {
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
-  block_template: Arc<Mutex<Value>>,
+  block_template: Arc<Mutex<BlockTemplate>>,
 }
 
 impl PoolServer {
   fn new()-> PoolServer {
     PoolServer {
       miner_connections: Default::default(),
-      block_template: Arc::new(Mutex::new(Value::default()))
+      block_template: Arc::new(Mutex::new(Default::default()))
     }
   }
 
@@ -273,13 +278,15 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
       match template {
         Ok(template) => {
           // TODO it's best to only update when there is a new prev_hash (or height?)
-          if let Some(&Value::Object(ref template_result)) = template.get("result") {
-            *current_template = Value::Object(template_result.clone())
+          if let Some(result) = template.get("result") {
+            if let Ok(new_template) = serde_json::from_value(result.clone()) {
+              *current_template = new_template
+            }
           }
         },
         Err(message) => println!("Failed to get new block template: {}", message)
       }
-      println!("New block template: {}", current_template);
+      println!("New block template: {}", current_template.blocktemplate_blob);
       tick.recv().unwrap();
     }
   });
