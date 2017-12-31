@@ -1,3 +1,6 @@
+#![feature(i128_type)]
+#![feature(box_syntax)]
+
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
@@ -12,10 +15,16 @@ extern crate schedule_recv;
 extern crate bytes;
 extern crate num_bigint;
 extern crate num_integer;
+extern crate mithril;
+extern crate groestl;
+extern crate blake;
+extern crate jhffi;
+extern crate skeinffi;
 
 
 mod config;
 mod server;
+mod cryptonightlite;
 
 fn main() {
   let config = config::read_config();

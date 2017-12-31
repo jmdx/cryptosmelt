@@ -16,6 +16,18 @@ bytes = "0.4"
 num-bigint = "0.1"
 num-integer = "0.1"
 
+# Dependencies for our lite variant on Mithril's cryptonight implementation
+groestl = "0.3.0"
+blake = "2.0.0"
+jh-ffi = "0.0.2"
+skein-ffi = "0.0.1"
+
+[dependencies.mithril]
+git = 'https://github.com/Ragnaroek/mithril'
+# TODO freeze the version here
+# TODO document that this means we can't use the stable version of rust
+branch = 'master'
+
 [dependencies.uuid]
 version = "0.4"
 features = ["v4"]
