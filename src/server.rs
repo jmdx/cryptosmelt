@@ -3,6 +3,7 @@ use jsonrpc_core::serde_json::{Map};
 use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::result::Result as StdResult;
 use concurrent_hashmap::*;
 use uuid::*;
 use reqwest;
@@ -31,7 +32,7 @@ fn cn_hash(input: Vec<u8>, hash_type: HashType) -> String {
 #[test]
 fn test_hash() {
   let input = byte_string::string_to_u8_array("");
-  assert_eq!(cn_hash(input.to_owned(), HashType::Cryptonight), "eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
+  assert_eq!(cn_hash(input.to_owned(), HashType::Cryptonight),"eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
   // Test case taken from https://github.com/ExcitableAardvark/node-cryptonight-lite
   assert_eq!(cn_hash(input, HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
 }
@@ -277,16 +278,20 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
       let mut current_template = template_refresh_ref.block_template.lock().unwrap();
       match template {
         Ok(template) => {
-          // TODO it's best to only update when there is a new prev_hash (or height?)
+          // TODO verify that checking the height (and not prev_hash) is sufficient
           if let Some(result) = template.get("result") {
-            if let Ok(new_template) = serde_json::from_value(result.clone()) {
-              *current_template = new_template
+            let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
+              serde_json::from_value(result.clone());
+            if let Ok(new_template) = parsed_template {
+              if new_template.height > current_template.height {
+                println!("New block template of height {}.", new_template.height);
+                *current_template = new_template;
+              }
             }
           }
         },
         Err(message) => println!("Failed to get new block template: {}", message)
       }
-      println!("New block template: {}", current_template.blocktemplate_blob);
       tick.recv().unwrap();
     }
   });
