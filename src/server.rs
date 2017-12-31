@@ -44,7 +44,25 @@ struct Job {
   height: u64,
   difficulty: u64,
   diff_hex: String,
-  submissions: ConcHashMap<String, bool>,
+  // TODO maybe make a struct to deserialize templates into
+  template: Arc<Mutex<Value>>,
+  submissions: ConcHashMap<u32, bool>,
+}
+
+impl Job {
+  fn submit(&self, nonce: u32) -> Result<Value> {
+    let previous_submission = self.submissions.insert(nonce, true);
+    if let Some(_) = previous_submission {
+      // TODO we'll probably want some auto banning functionality in place here
+      return Err(Error::invalid_params("Nonce already submitted"));
+    }
+    // TODO check if the block is expired, may want to do away with the template reference and just
+    // check against the current template, since anything of a lower height will be expired as long
+    // as we only keep one template per height
+
+    // TODO implement block checking/processing
+    Err(Error::internal_error())
+  }
 }
 
 // TODO eventually this 'allow' will need to go away
@@ -73,7 +91,7 @@ impl Miner {
     full_diff_hexes.join("") + "00"
   }
 
-  fn get_job(&self, current_template: Value) -> Result<Value> {
+  fn get_job(&self, current_template: &Arc<Mutex<Value>>) -> Result<Value> {
     // Notes on the block template:
     // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce
     // - the daemon returns result.reserved_offset, and that many bytes into
@@ -81,7 +99,8 @@ impl Miner {
     // - the node pools use a global counter, but we might want the counter to be per-miner
     // - it might not even be necessary to use any counters
     //   (and just go with the first 8 bytes of the miner id)
-    if let Value::Object(template_data) = current_template {
+    let arc_template = current_template.clone();
+    if let Value::Object(ref template_data) = *arc_template.lock().unwrap() {
       if let Some(&Value::String(ref blob)) = template_data.get("blocktemplate_blob") {
         if let Some(&Value::Number(ref height)) = template_data.get("height") {
           let job_id = &Uuid::new_v4().to_string();
@@ -95,6 +114,7 @@ impl Miner {
             height: height.as_u64().unwrap(),
             difficulty: self.difficulty,
             diff_hex: target_hex.to_owned(),
+            template: current_template.clone(),
             submissions: Default::default(),
           };
           self.jobs.insert(job_id.to_owned(), new_job);
@@ -119,14 +139,14 @@ impl Metadata for Meta {}
 struct PoolServer {
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
-  block_template: Mutex<Value>,
+  block_template: Arc<Mutex<Value>>,
 }
 
 impl PoolServer {
   fn new()-> PoolServer {
     PoolServer {
       miner_connections: Default::default(),
-      block_template: Mutex::new(Value::default())
+      block_template: Arc::new(Mutex::new(Value::default()))
     }
   }
 
@@ -145,7 +165,7 @@ impl PoolServer {
 
   fn getjob(&self, params: Map<String, Value>) -> Result<Value> {
     if let Some(miner) = self.getminer(params) {
-      miner.get_job(self.block_template.lock().unwrap().clone())
+      miner.get_job(&self.block_template)
     }
     else {
       Err(Error::invalid_params("No miner with this ID"))
@@ -168,7 +188,7 @@ impl PoolServer {
       };
       let response = json!({
         "id": id,
-        "job": miner.get_job(self.block_template.lock().unwrap().clone())?,
+        "job": miner.get_job(&self.block_template)?,
         "status": "OK",
       });
       self.miner_connections.insert(id.to_owned(), miner);
@@ -252,6 +272,7 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
       let mut current_template = template_refresh_ref.block_template.lock().unwrap();
       match template {
         Ok(template) => {
+          // TODO it's best to only update when there is a new prev_hash (or height?)
           if let Some(&Value::Object(ref template_result)) = template.get("result") {
             *current_template = Value::Object(template_result.clone())
           }
