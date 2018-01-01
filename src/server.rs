@@ -1,6 +1,7 @@
 use jsonrpc_core::*;
 use jsonrpc_core::serde_json::{Map};
 use jsonrpc_tcp_server::*;
+use std::u32;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::result::Result as StdResult;
@@ -34,7 +35,9 @@ fn test_hash() {
   let input = byte_string::string_to_u8_array("");
   assert_eq!(cn_hash(input.to_owned(), HashType::Cryptonight),"eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
   // Test case taken from https://github.com/ExcitableAardvark/node-cryptonight-lite
-  assert_eq!(cn_hash(input, HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
+  assert_eq!(cn_hash(input.to_owned(), HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
+  let input2 = byte_string::string_to_u8_array("5468697320697320612074657374");
+  assert_eq!(cn_hash(input2, HashType::CryptonightLite), "88e5e684db178c825e4ce3809ccc1cda79cc2adb4406bff93debeaf20a8bebd9");
 }
 
 #[derive(Deserialize, Default)]
@@ -57,12 +60,12 @@ struct Job {
   difficulty: u64,
   diff_hex: String,
   template: Arc<Mutex<BlockTemplate>>,
-  submissions: ConcHashMap<u32, bool>,
+  submissions: ConcHashMap<String, bool>,
 }
 
 impl Job {
-  fn submit(&self, nonce: u32) -> Result<Value> {
-    let previous_submission = self.submissions.insert(nonce, true);
+  fn submit(&self, nonce: &String) -> Result<Value> {
+    let previous_submission = self.submissions.insert(nonce.to_owned(), true);
     if let Some(_) = previous_submission {
       // TODO we'll probably want some auto banning functionality in place here
       return Err(Error::invalid_params("Nonce already submitted"));
@@ -70,8 +73,23 @@ impl Job {
     // TODO check if the block is expired, may want to do away with the template reference and just
     // check against the current template, since anything of a lower height will be expired as long
     // as we only keep one template per height
-
-    // TODO implement block checking/processing
+    let blob = &self.template.lock().unwrap().blockhashing_blob;
+    let (a, _) = blob.split_at(78);
+    let (_, b) = blob.split_at(86);
+    let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", a, nonce, b));
+    println!("Blob to hash: {}\n {} {} {}", blob, a, nonce, b);
+    let hash = cn_hash(hash_input, HashType::CryptonightLite);
+    let hash_val = byte_string::hex2_u64_le(&hash[48..]);
+    // TODO not entirely sure if the line below is correct
+    let achieved_difficulty = u64::max_value() / hash_val;
+    println!("Hash value: {}, hash: {}, ratio: {}", hash_val, hash, achieved_difficulty);
+    if achieved_difficulty >= self.difficulty {
+      println!("Valid job submission");
+      return Ok(Value::String("Result accepted".to_owned()));
+    }
+    else {
+      println!("Bad job submission");
+    }
     Err(Error::internal_error())
   }
 }
@@ -128,7 +146,7 @@ impl Miner {
     };
     self.jobs.insert(job_id.to_owned(), new_job);
     return Ok(json!({
-      "id": job_id,
+      "job_id": job_id,
       "blob": template_data.blockhashing_blob,
       "target": target_hex,
     }));
@@ -156,7 +174,7 @@ impl PoolServer {
     }
   }
 
-  fn getminer(&self, params: Map<String, Value>) -> Option<&Miner> {
+  fn getminer(&self, params: &Map<String, Value>) -> Option<&Miner> {
     if let Some(&Value::String(ref id)) = params.get("id") {
       if let Some(miner) = self.miner_connections.find(id) {
         let miner: &Miner = miner.get();
@@ -170,7 +188,7 @@ impl PoolServer {
   }
 
   fn getjob(&self, params: Map<String, Value>) -> Result<Value> {
-    if let Some(miner) = self.getminer(params) {
+    if let Some(miner) = self.getminer(&params) {
       miner.get_job(&self.block_template)
     }
     else {
@@ -203,6 +221,21 @@ impl PoolServer {
       Err(Error::invalid_params("Login address required"))
     }
   }
+
+  fn submit(&self, params: Map<String, Value>) -> Result<Value> {
+    if let Some(miner) = self.getminer(&params) {
+      if let Some(&Value::String(ref job_id)) = params.get("job_id") {
+        if let Some(job) = miner.jobs.find(job_id) {
+          if let Some(&Value::String(ref nonce)) = params.get("nonce") {
+            println!("nonce: {}", nonce);
+            // TODO verify the nonce length
+            return job.get().submit(nonce);
+          }
+        }
+      }
+    }
+    Err(Error::invalid_params("No miner with this ID"))
+  }
 }
 
 // TODO this will probably go in another file
@@ -225,7 +258,7 @@ fn call_daemon(daemon_url: &str, method: &str, params: Value)
 pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
   // TODO take in 2 structs, ServerConfig and GlobalConfig
   // TODO we'll want one PoolServer instance, multiple ports will need to reach it
-  let mut io = MetaIoHandler::default();
+  let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
   //let mut pool_server: PoolServer = PoolServer::new();
   let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
   let login_ref = pool_server.clone();
@@ -246,9 +279,13 @@ pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
     }
   });
 
-  let _submit_ref = pool_server.clone();
-  io.add_method("submit", |_params| {
-    Ok(Value::String("hello".to_owned()))
+  let submit_ref = pool_server.clone();
+  io.add_method("submit", move |params| {
+    // TODO repeating this match isn't pretty
+    match params {
+      Params::Map(map) => submit_ref.submit(map),
+      _ => Err(Error::invalid_params("Expected a params map")),
+    }
   });
 
   let _keepalived_ref = pool_server.clone();
