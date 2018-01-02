@@ -65,6 +65,12 @@ struct Job {
 
 impl Job {
   fn submit(&self, nonce: &String) -> Result<Value> {
+    if nonce.len() != 8 {
+      // We expect a hex representing a 32 bit integer.  We don't care so much about validating that
+      // it is purely hexadecimal chaaracters, though, since string_to_u8_array will just zero out
+      // anything non-hexadecimal.
+      return Err(Error::invalid_params("Nonce must be 8 hexadecimal characters"));
+    }
     let previous_submission = self.submissions.insert(nonce.to_owned(), true);
     if let Some(_) = previous_submission {
       // TODO we'll probably want some auto banning functionality in place here
@@ -230,7 +236,6 @@ impl PoolServer {
         if let Some(job) = miner.jobs.find(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
             println!("nonce: {}", nonce);
-            // TODO verify the nonce length
             return job.get().submit(nonce);
           }
         }
