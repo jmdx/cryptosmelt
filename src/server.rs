@@ -15,7 +15,7 @@ use num_integer::*;
 use mithril::byte_string;
 use mithril::cryptonight::*;
 use cryptonightlite;
-use config::Config;
+use config::*;
 
 enum HashType {
   Cryptonight,
@@ -167,14 +167,16 @@ struct Meta {
 impl Metadata for Meta {}
 
 struct PoolServer {
+  config: ServerConfig,
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
   block_template: Arc<Mutex<BlockTemplate>>,
 }
 
 impl PoolServer {
-  fn new()-> PoolServer {
+  fn new(server_config: &ServerConfig)-> PoolServer {
     PoolServer {
+      config: server_config.clone(),
       miner_connections: Default::default(),
       block_template: Arc::new(Mutex::new(Default::default()))
     }
@@ -215,8 +217,8 @@ impl PoolServer {
         // TODO password isn't used, should probably go away
         password: "".to_owned(),
         peer_addr: meta.peer_addr.unwrap(),
-        // TODO implement variable, configurable, fixed difficulties
-        difficulty: 5000,
+        // TODO implement vardiff
+        difficulty: self.config.difficulty,
         jobs: Default::default(),
       };
       let response = json!({
@@ -269,7 +271,7 @@ pub fn init(config: Config) {
   for server_config in &config_ref.ports {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     //let mut pool_server: PoolServer = PoolServer::new();
-    let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
+    let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new(server_config));
     let login_ref = pool_server.clone();
     io.add_method_with_meta("login", move |params, meta: Meta| {
       // TODO repeating this match isn't pretty

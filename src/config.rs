@@ -10,7 +10,7 @@ pub struct Config {
   pub ports: Vec<ServerConfig>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ServerConfig {
   pub port: u16,
   pub difficulty: u64,
