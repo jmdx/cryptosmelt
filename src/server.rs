@@ -100,8 +100,7 @@ struct Miner {
   miner_id: String,
   login: String,
   password: String,
-  // TODO we'll probably want to just reject the case of a miner coming in without an address
-  peer_addr: Option<SocketAddr>,
+  peer_addr: SocketAddr,
   difficulty: u64,
   jobs: ConcHashMap<String, Job>,
 }
@@ -197,6 +196,9 @@ impl PoolServer {
   }
 
   fn login(&self, params: Map<String, Value>, meta: Meta) -> Result<Value> {
+    if let None = meta.peer_addr {
+      return Err(Error::internal_error());
+    }
     if let Some(&Value::String(ref login)) = params.get("login") {
       let id = &Uuid::new_v4().to_string();
       // TODO add some validation on the login address
@@ -205,7 +207,7 @@ impl PoolServer {
         login: login.to_owned(),
         // TODO password isn't used, should probably go away
         password: "".to_owned(),
-        peer_addr: meta.peer_addr,
+        peer_addr: meta.peer_addr.unwrap(),
         // TODO implement variable, configurable, fixed difficulties
         difficulty: 5000,
         jobs: Default::default(),
