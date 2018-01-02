@@ -7,6 +7,13 @@ pub struct Config {
   // TODO there will need to be both a wallet and a daemon address
   pub daemon_url: String,
   pub pool_wallet: String,
+  pub ports: Vec<ServerConfig>,
+}
+
+#[derive(Deserialize)]
+pub struct ServerConfig {
+  pub port: u16,
+  pub difficulty: u64,
 }
 
 pub fn read_config() -> Config {

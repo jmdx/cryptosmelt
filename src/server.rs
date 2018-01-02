@@ -15,6 +15,7 @@ use num_integer::*;
 use mithril::byte_string;
 use mithril::cryptonight::*;
 use cryptonightlite;
+use config::Config;
 
 enum HashType {
   Cryptonight,
@@ -261,85 +262,90 @@ fn call_daemon(daemon_url: &str, method: &str, params: Value)
   res.json()
 }
 
-// TODO probably take in a difficulty here
-pub fn init(port: u16, daemon_url: String, pool_wallet: String) {
-  // TODO take in 2 structs, ServerConfig and GlobalConfig
-  // TODO we'll want one PoolServer instance, multiple ports will need to reach it
-  let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
-  //let mut pool_server: PoolServer = PoolServer::new();
-  let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
-  let login_ref = pool_server.clone();
-  io.add_method_with_meta("login", move |params, meta: Meta| {
-    // TODO repeating this match isn't pretty
-    match params {
-      Params::Map(map) => login_ref.login(map, meta),
-      _ => Err(Error::invalid_params("Expected a params map")),
-    }
-  });
-
-  let getjob_ref = pool_server.clone();
-  io.add_method("getjob", move |params: Params| {
-    // TODO repeating this match isn't pretty
-    match params {
-      Params::Map(map) => getjob_ref.getjob(map),
-      _ => Err(Error::invalid_params("Expected a params map")),
-    }
-  });
-
-  let submit_ref = pool_server.clone();
-  io.add_method("submit", move |params| {
-    // TODO repeating this match isn't pretty
-    match params {
-      Params::Map(map) => submit_ref.submit(map),
-      _ => Err(Error::invalid_params("Expected a params map")),
-    }
-  });
-
-  let _keepalived_ref = pool_server.clone();
-  io.add_method("keepalived", |_params| {
-    Ok(Value::String("hello".to_owned()))
-  });
-
-  let server = ServerBuilder::new(io)
-    .session_meta_extractor(|context: &RequestContext| {
-      Meta {
-        peer_addr: Some(context.peer_addr)
+pub fn init(config: Config) {
+  // TODO bind the server difficulties to their configs
+  let config_ref = Arc::new(config);
+  let inner_config_ref = config_ref.clone();
+  for server_config in &config_ref.ports {
+    let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
+    //let mut pool_server: PoolServer = PoolServer::new();
+    let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new());
+    let login_ref = pool_server.clone();
+    io.add_method_with_meta("login", move |params, meta: Meta| {
+      // TODO repeating this match isn't pretty
+      match params {
+        Params::Map(map) => login_ref.login(map, meta),
+        _ => Err(Error::invalid_params("Expected a params map")),
       }
-    })
-    .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), port))
-    .unwrap();
-  // TODO make sure we refresh the template after every successful submit
-  let template_refresh_ref = pool_server.clone();
-  thread::spawn(move || {
-    // TODO maybe configurable block refresh interval
-    let tick = periodic_ms(10000);
-    loop {
-      let params = json!({
-        "wallet_address": pool_wallet,
-        "reserve_size": 8
-      });
-      let template = call_daemon(&daemon_url, "getblocktemplate", params);
-      let mut current_template = template_refresh_ref.block_template.lock().unwrap();
-      match template {
-        Ok(template) => {
-          // TODO verify that checking the height (and not prev_hash) is sufficient
-          if let Some(result) = template.get("result") {
-            let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
-              serde_json::from_value(result.clone());
-            if let Ok(new_template) = parsed_template {
-              if new_template.height > current_template.height {
-                println!("New block template of height {}.", new_template.height);
-                *current_template = new_template;
+    });
+
+    let getjob_ref = pool_server.clone();
+    io.add_method("getjob", move |params: Params| {
+      // TODO repeating this match isn't pretty
+      match params {
+        Params::Map(map) => getjob_ref.getjob(map),
+        _ => Err(Error::invalid_params("Expected a params map")),
+      }
+    });
+
+    let submit_ref = pool_server.clone();
+    io.add_method("submit", move |params| {
+      // TODO repeating this match isn't pretty
+      match params {
+        Params::Map(map) => submit_ref.submit(map),
+        _ => Err(Error::invalid_params("Expected a params map")),
+      }
+    });
+
+    let _keepalived_ref = pool_server.clone();
+    io.add_method("keepalived", |_params| {
+      Ok(Value::String("hello".to_owned()))
+    });
+
+    let server = ServerBuilder::new(io)
+      .session_meta_extractor(|context: &RequestContext| {
+        Meta {
+          peer_addr: Some(context.peer_addr)
+        }
+      })
+      .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), server_config.port))
+      .unwrap();
+    // TODO make sure we refresh the template after every successful submit
+    let template_refresh_ref = pool_server.clone();
+    // TODO we'll want just one, global template refresh thread
+    let thread_config_ref = inner_config_ref.clone();
+    thread::spawn(move || {
+      // TODO maybe configurable block refresh interval
+      let tick = periodic_ms(10000);
+      loop {
+        let params = json!({
+          "wallet_address": thread_config_ref.pool_wallet,
+          "reserve_size": 8
+        });
+        let template = call_daemon(&thread_config_ref.daemon_url, "getblocktemplate", params);
+        let mut current_template = template_refresh_ref.block_template.lock().unwrap();
+        match template {
+          Ok(template) => {
+            // TODO verify that checking the height (and not prev_hash) is sufficient
+            if let Some(result) = template.get("result") {
+              let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
+                serde_json::from_value(result.clone());
+              if let Ok(new_template) = parsed_template {
+                if new_template.height > current_template.height {
+                  println!("New block template of height {}.", new_template.height);
+                  *current_template = new_template;
+                }
               }
             }
-          }
-        },
-        Err(message) => println!("Failed to get new block template: {}", message)
+          },
+          Err(message) => println!("Failed to get new block template: {}", message)
+        }
+        tick.recv().unwrap();
       }
-      tick.recv().unwrap();
-    }
-  });
-  server.wait();
+    });
+    thread::spawn(|| server.wait());
+  }
+  thread::park();
 }
 
 #[test]

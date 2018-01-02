@@ -28,5 +28,5 @@ mod cryptonightlite;
 
 fn main() {
   let config = config::read_config();
-  server::init(11337, config.daemon_url, config.pool_wallet);
+  server::init(config);
 }

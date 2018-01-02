@@ -1,2 +1,10 @@
 daemon_url="http://node.aeon-wallet.net:11181/json_rpc"
 pool_wallet=""
+
+[[ports]]
+port = 11337
+difficulty = 500
+
+[[ports]]
+port = 11338
+difficulty = 5000
