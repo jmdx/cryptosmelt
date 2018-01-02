@@ -325,22 +325,24 @@ pub fn init(config: Config) {
           "reserve_size": 8
         });
         let template = call_daemon(&thread_config_ref.daemon_url, "getblocktemplate", params);
-        let mut current_template = template_refresh_ref.block_template.lock().unwrap();
-        match template {
-          Ok(template) => {
-            // TODO verify that checking the height (and not prev_hash) is sufficient
-            if let Some(result) = template.get("result") {
-              let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
-                serde_json::from_value(result.clone());
-              if let Ok(new_template) = parsed_template {
-                if new_template.height > current_template.height {
-                  println!("New block template of height {}.", new_template.height);
-                  *current_template = new_template;
+        {
+          let mut current_template = template_refresh_ref.block_template.lock().unwrap();
+          match template {
+            Ok(template) => {
+              // TODO verify that checking the height (and not prev_hash) is sufficient
+              if let Some(result) = template.get("result") {
+                let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
+                  serde_json::from_value(result.clone());
+                if let Ok(new_template) = parsed_template {
+                  if new_template.height > current_template.height {
+                    println!("New block template of height {}.", new_template.height);
+                    *current_template = new_template;
+                  }
                 }
               }
-            }
-          },
-          Err(message) => println!("Failed to get new block template: {}", message)
+            },
+            Err(message) => println!("Failed to get new block template: {}", message)
+          }
         }
         tick.recv().unwrap();
       }
