@@ -1,3 +1,4 @@
+influx_url="http://localhost:8086"
 daemon_url="http://node.aeon-wallet.net:11181/json_rpc"
 pool_wallet=""
 

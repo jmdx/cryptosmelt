@@ -25,6 +25,7 @@ extern crate skeinffi;
 mod config;
 mod server;
 mod cryptonightlite;
+mod data;
 
 fn main() {
   let config = config::read_config();

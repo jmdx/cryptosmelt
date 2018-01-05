@@ -4,6 +4,7 @@ use toml;
 
 #[derive(Deserialize)]
 pub struct Config {
+  pub influx_url: String,
   // TODO there will need to be both a wallet and a daemon address
   pub daemon_url: String,
   pub pool_wallet: String,
