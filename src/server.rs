@@ -268,7 +268,7 @@ pub fn init(config: Config) {
   // TODO bind the server difficulties to their configs
   let config_ref = Arc::new(config);
   let inner_config_ref = config_ref.clone();
-  for server_config in &config_ref.ports {
+  let servers: Vec<Arc<PoolServer>> = config_ref.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     //let mut pool_server: PoolServer = PoolServer::new();
     let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new(server_config));
@@ -312,44 +312,40 @@ pub fn init(config: Config) {
       })
       .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), server_config.port))
       .unwrap();
-    // TODO make sure we refresh the template after every successful submit
-    let template_refresh_ref = pool_server.clone();
-    // TODO we'll want just one, global template refresh thread
-    let thread_config_ref = inner_config_ref.clone();
-    thread::spawn(move || {
-      // TODO maybe configurable block refresh interval
-      let tick = periodic_ms(10000);
-      loop {
-        let params = json!({
-          "wallet_address": thread_config_ref.pool_wallet,
-          "reserve_size": 8
-        });
-        let template = call_daemon(&thread_config_ref.daemon_url, "getblocktemplate", params);
-        {
-          let mut current_template = template_refresh_ref.block_template.lock().unwrap();
-          match template {
-            Ok(template) => {
-              // TODO verify that checking the height (and not prev_hash) is sufficient
-              if let Some(result) = template.get("result") {
-                let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
-                  serde_json::from_value(result.clone());
-                if let Ok(new_template) = parsed_template {
-                  if new_template.height > current_template.height {
-                    println!("New block template of height {}.", new_template.height);
-                    *current_template = new_template;
-                  }
-                }
+    thread::spawn(|| server.wait());
+    pool_server
+  }).collect();
+
+  // TODO make sure we refresh the template after every successful submit
+  let thread_config_ref = inner_config_ref.clone();
+  let tick = periodic_ms(10000);
+  loop {
+    let params = json!({
+        "wallet_address": thread_config_ref.pool_wallet,
+        "reserve_size": 8
+      });
+    let template = call_daemon(&thread_config_ref.daemon_url, "getblocktemplate", params);
+    match template {
+      Ok(template) => {
+        // TODO verify that checking the height (and not prev_hash) is sufficient
+        if let Some(result) = template.get("result") {
+          for server in servers.iter() {
+            let mut current_template = server.block_template.lock().unwrap();
+            let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
+              serde_json::from_value(result.clone());
+            if let Ok(new_template) = parsed_template {
+              if new_template.height > current_template.height {
+                println!("New block template of height {}.", new_template.height);
+                *current_template = new_template;
               }
-            },
-            Err(message) => println!("Failed to get new block template: {}", message)
+            }
           }
         }
-        tick.recv().unwrap();
-      }
-    });
-    thread::spawn(|| server.wait());
+      },
+      Err(message) => println!("Failed to get new block template: {}", message)
+    }
+    tick.recv().unwrap();
   }
-  thread::park();
 }
 
 #[test]
