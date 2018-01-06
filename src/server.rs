@@ -16,6 +16,8 @@ use mithril::byte_string;
 use mithril::cryptonight::*;
 use cryptonightlite;
 use config::*;
+use data::InfluxClient;
+use regex::Regex;
 
 enum HashType {
   Cryptonight,
@@ -171,14 +173,18 @@ struct PoolServer {
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
   block_template: Arc<Mutex<BlockTemplate>>,
+  db: Arc<InfluxClient>,
+  address_pattern: Regex,
 }
 
 impl PoolServer {
-  fn new(server_config: &ServerConfig)-> PoolServer {
+  fn new(server_config: &ServerConfig, db: Arc<InfluxClient>)-> PoolServer {
     PoolServer {
       config: server_config.clone(),
       miner_connections: Default::default(),
-      block_template: Arc::new(Mutex::new(Default::default()))
+      block_template: Arc::new(Mutex::new(Default::default())),
+      db,
+      address_pattern: Regex::new("[a-zA-Z0-9]").unwrap()
     }
   }
 
@@ -239,7 +245,19 @@ impl PoolServer {
         if let Some(job) = miner.jobs.find(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
             println!("nonce: {}", nonce);
-            return job.get().submit(nonce);
+            let job = job.get();
+            return job.submit(nonce).and_then(|_| {
+              if !self.address_pattern.is_match(&miner.login) {
+                return Err(Error::invalid_params("Miner ID must be alphanumeric"));
+              }
+              // TODO maybe insert the nonce and template, that would be cool because then the
+              // server becomes fully auditable by connected miners
+              let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
+              match self.db.write(&to_insert) {
+                Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
+                Err(_) => Err(Error::internal_error())
+              }
+            });
           }
         }
       }
@@ -265,13 +283,14 @@ fn call_daemon(daemon_url: &str, method: &str, params: Value)
 }
 
 pub fn init(config: Config) {
-  // TODO bind the server difficulties to their configs
   let config_ref = Arc::new(config);
+  let influx_client = Arc::new(InfluxClient::new(config_ref.clone()));
   let inner_config_ref = config_ref.clone();
   let servers: Vec<Arc<PoolServer>> = config_ref.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
-    //let mut pool_server: PoolServer = PoolServer::new();
-    let pool_server: Arc<PoolServer> = Arc::new(PoolServer::new(server_config));
+    let pool_server: Arc<PoolServer> = Arc::new(
+      PoolServer::new(server_config, influx_client.clone())
+    );
     let login_ref = pool_server.clone();
     io.add_method_with_meta("login", move |params, meta: Meta| {
       // TODO repeating this match isn't pretty

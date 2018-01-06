@@ -20,6 +20,7 @@ extern crate groestl;
 extern crate blake;
 extern crate jhffi;
 extern crate skeinffi;
+extern crate regex;
 
 
 mod config;
