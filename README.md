@@ -1,6 +1,6 @@
 # Cryptosmelt
 Cryptonote and Cryptonote-Lite pool software, written in Rust and using InfluxDB as the data store.
-** This does not have any payment/reward system in place, so is not ready for use.**
+__This does not have any payment/reward system in place, so is not ready for use.__
 
 # Dependencies
 - Rust (nightly version)
@@ -17,9 +17,10 @@ rustup install nightly
 
 *Nightly is needed because of the dependency upon [mithril's](https://github.com/Ragnaroek/mithril) Cryptonight hash implementation.*
 
-Then install InfluxDB 1.4 via the instructions at https://docs.influxdata.com/influxdb/v1.4/introduction/installation/
+Then install InfluxDB 1.4 via the instructions [here.](https://docs.influxdata.com/influxdb/v1.4/introduction/installation/)
+At the time of writing, Windows binaries are not listed in influxdb's documentation, but can be found [on their download page.](https://portal.influxdata.com/downloads)
 
-Finally, checkout this repo and enter your pool wallet address (currently Aeon-only) as pool_wallet in `config.toml`.  Then execute 'cargo run' and the server will listen on the ports configured in that file.
+Finally, checkout this repo and enter your pool wallet address (currently Aeon-only) as `pool_wallet` in `config.toml`.  Then execute `cargo run` and the server will listen on the ports configured in that file.
 
 # Recommended tools
 
