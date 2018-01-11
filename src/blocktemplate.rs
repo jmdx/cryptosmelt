@@ -1,19 +1,55 @@
 use longkeccak::keccak;
 use mithril::byte_string;
 
-// TODO all of the tree hashing stuff should go in another file
-fn tree_hash_cnt(count: usize) -> usize {
-  let mut i = 1;
-  while i * 2 < count {
-    // TODO this isn't optimal, but maybe we don't care
-    i *= 2;
+#[derive(Deserialize, Default)]
+pub struct BlockTemplate {
+  // TODO eventually most of this stuff can be private
+  pub blockhashing_blob: String,
+  pub blocktemplate_blob: String,
+  pub difficulty: u64,
+  pub height: u64,
+  pub prev_hash: String,
+  pub reserved_offset: u32,
+  pub status: String,
+}
+
+impl BlockTemplate {
+  pub fn hashing_blob_with_nonce(&self, nonce: &str) -> Option<String> {
+    // TODO document this slicing stuff
+    let miner_tx = format!(
+      "{}{}",
+      &self.blocktemplate_blob[86..((self.reserved_offset * 2 - 2) as usize)],
+      nonce
+    );
+    let miner_tx_hash = keccak(&byte_string::string_to_u8_array(&miner_tx))[..32].to_vec();
+    let hex_digits_left = (self.blocktemplate_blob.len() - miner_tx.len()) - 86;
+    if (hex_digits_left - 2) % 64 != 0 {
+      println!("{}", hex_digits_left);
+      return None;
+    }
+    let mut tx_hashes = Vec::new();
+    tx_hashes.push(miner_tx_hash);
+    for tx_index in 0..(hex_digits_left / 64) {
+      // TODO make these numbers less magic, maybe just increment an index for readability
+      // TODO the "2" here assumes 1 byte for transaction count, that needs to be a varint as well
+      let start = miner_tx.len() + 86 + 2 + 64 * tx_index;
+      tx_hashes.push(byte_string::string_to_u8_array(&self.blocktemplate_blob[start..(start + 64)]));
+    }
+    let num_hashes: Vec<String> = to_varint(tx_hashes.len()).iter()
+      .map(|b| format!("{:02x}", b))
+      .collect();
+    let root_hash: Vec<String> = tree_hash(tx_hashes).iter()
+      .map(|b| format!("{:02x}", b))
+      .collect();
+    return Some(
+      format!("{}{}{}", &self.blockhashing_blob[..86], &root_hash.join(""), &num_hashes.join(""))
+    );
   }
-  return i;
 }
 
 /// From CNS-3 section 3
 /// TODO document this, and really everything else, a bit better
-fn get_varint(source: &[u8]) -> (usize, usize) {
+fn from_varint(source: &[u8]) -> (usize, usize) {
   if source[0] < 128 {
     return (source[0] as usize, 1);
   }
@@ -29,60 +65,28 @@ fn get_varint(source: &[u8]) -> (usize, usize) {
   return (sum, i + 1);
 }
 
-#[test]
-fn test_get_varint() {
-  assert_eq!(get_varint(&[42]), (42, 1));
-  assert_eq!(get_varint(&[128 + 1, 42]), (42 * 128 + 1, 2));
-  assert_eq!(get_varint(&[128 + 60, 128 + 61, 63]), (63 * 128 * 128 + 61 * 128 + 60, 3));
+fn to_varint(number: usize) -> Vec<u8> {
+  let mut remaining = number;
+  let mut bytes = Vec::new();
+  while remaining > 0 {
+    bytes.push(((remaining % 128) + 128) as u8);
+    remaining = remaining >> 7;
+  }
+  let marker_index = bytes.len() - 1;
+  // The first value less than 128 marks the end of a varint byte sequence
+  bytes[marker_index] -= 128;
+  bytes
 }
 
-fn parse_block_template(template: Vec<u8>) {
-  // TODO maybe remove this, since it likely won't be used
-  let mut i = 42;
-  // The nonce is from bytes 34-38, and the data we need to compute the mining blob starts at 39.
-  let (format, format_len) = get_varint(&template[i..]);
-  // println!("format {}", format);
-  i += format_len;
-  let (version, version_len) = get_varint(&template[i..]);
-  // println!("version {}", version);
-  i += version_len;
-  let (unlock_time, unlock_time_len) = get_varint(&template[i..]);
-  // println!("unlock_time {}", unlock_time);
-  i += unlock_time_len;
-  let (input_num, input_num_len) = get_varint(&template[i..]);
-  // println!("input_num {}", input_num);
-  i += input_num_len;
-  i += 1; // input_type which is one byte
-  // TODO height is a good checkpoint
-  let (height, height_len) = get_varint(&template[i..]);
-  i += height_len;
-  // println!("Parsed height: {} from {} to {} ", height, i - height_len, i);
-  let (output_num, output_num_len) = get_varint(&template[i..]);
-  i += output_num_len;
-  // println!("Output num: {}", output_num);
-  // note: each key in output is 32 bytes, though is preceded by a varint
-  for _ in 0..output_num {
-    let (_amount, amount_len) = get_varint(&template[i..]);
-    // println!("amount {}", _amount);
-    i += amount_len;
-    // println!("output_type {}", template[i]);
-    i += 1; // 1 byte for output_type
-    i += 32; // 32 bytes for the key field;
-  }
-  // println!("extra_size position: {}", i);
-  let extra_size = template[i];
-  // println!("extra_size {}", extra_size);
-  i += 1 + extra_size as usize;
-  let (tx_num, tx_num_len) = get_varint(&template[i..]);
-  i += tx_num_len;
-  // println!("{} bytes remaining, should be 32 * {}", template.len() - i, tx_num);
-  // TODO since the daemon returns the extra_nonce offset, we can add 9 (8 for reserve_size and 1
-  // for the tx_size field) to get the start of the miner transactions
-  // So much of the above might be unnecessary, but we may still need it to find the start of the
-  // miner_tx
+#[test]
+fn test_varint() {
+  assert_eq!(from_varint(&[42]), (42, 1));
+  assert_eq!(from_varint(&[128 + 1, 42]), (42 * 128 + 1, 2));
+  assert_eq!(from_varint(&[128 + 60, 128 + 61, 63]), (63 * 128 * 128 + 61 * 128 + 60, 3));
 
-  // Note:  need to keep in mind, the last byte of the hashing blob is the number of transactions
-  // plus 1
+  assert_eq!(&to_varint(42)[..], &[42]);
+  assert_eq!(&to_varint(42 * 128 + 1)[..], &[128 + 1, 42]);
+  assert_eq!(&to_varint(63 * 128 * 128 + 61 * 128 + 60)[..], &[128 + 60, 128 + 61, 63]);
 }
 
 #[test]
@@ -106,14 +110,6 @@ fn test_parse_block_template() {
   };
   assert_eq!(test_block.blockhashing_blob,
              test_block.hashing_blob_with_nonce("0000000000000000").unwrap());
-}
-
-fn concat_and_hash(in1: &[u8], in2: &[u8]) -> Vec<u8> {
-  let mut concatted_inputs = in1.to_vec();
-  concatted_inputs.extend(in2.iter());
-  // TODO not sure if &foo[..] is the best way
-  // println!("concatted length {}", concatted_inputs.len());
-  return keccak(&concatted_inputs[..])[..32].to_vec();
 }
 
 // block ends with miner_tx which is a transaction, and tx_hashes which is a list of 32-byte hashes
@@ -146,113 +142,53 @@ fn test_tree_hash() {
              test_tree_hash.join(""));
 }
 
+
+fn tree_hash_cnt(count: usize) -> usize {
+  let mut i = 1;
+  while i * 2 < count {
+    // TODO this isn't optimal, but maybe we don't care
+    i *= 2;
+  }
+  return i;
+}
+
+fn concat_and_hash(in1: &[u8], in2: &[u8]) -> Vec<u8> {
+  let mut concatted_inputs = in1.to_vec();
+  concatted_inputs.extend(in2.iter());
+  return keccak(&concatted_inputs[..])[..32].to_vec();
+}
+
 // https://lab.getmonero.org/pubs/MRL-0002.pdf
 fn tree_hash(hashes: Vec<Vec<u8>>) -> Vec<u8> {
-  // TODO get rid of the commented out print statements and leftover C lines
   let count = hashes.len();
-  //assert(count > 0);
   if count == 1 {
     return hashes[0].to_vec();
   } else if count == 2 {
     return concat_and_hash(&hashes[0], &hashes[1]);
   } else {
     let mut cnt = tree_hash_cnt(count);
-    //let max_size_t = (size_t) - 1; // max allowed value of size_t
-    //assert(cnt < max_size_t / 2); // reasonable size to avoid any overflows. /2 is extra; Anyway should be limited much stronger by logical code
-    // as we have sane limits on transactions counts in blockchain rules
-
-    // char(*ints)[HASH_SIZE];
-    // let ints_size = cnt * HASH_SIZE;
-    // ints = alloca(ints_size);
     let mut ints: Vec<Vec<u8>> = Vec::new();
     let slice_point = 2 * cnt - count;
-    // memcpy(ints, hashes, (2 * cnt - count) * HASH_SIZE);
     for i in 0..slice_point {
       ints.push(hashes[i].clone())
     }
-    // memset(ints, 0, ints_size);  // allocate, and zero out as extra protection for using uninitialized mem
     for i in slice_point..count {
       ints.push(vec![0]);
     }
-    /// example, count = 42, then cnt = 32
-    /// i,j start off at (2 * 32) - 42, or 22
-    /// each iter i = 22 + (2 * (j - 22))
-    /// last iter, j = 31
-    /// i = 40
-    /// so i in [22..40] step 2
-    /// j in [22..32] step 1
-    /// more generally, i in [(2*cnt - count)..(count)] step 2
-    /// and, j in [(2*cnt - count)..(cnt)] step 1
     let mut i = slice_point;
     for j in slice_point..cnt {
-      // actually, we want hashes[i] concatted with hashes[i]+1
-      // println!("slice point: {}, i: {}, cnt: {}", slice_point, i, cnt);
-      // println!("lengths: {}, {}", hashes[i].len(), hashes[i + 1].len());
       ints[j] = concat_and_hash(&hashes[i], &hashes[i + 1]);
       i += 2;
-      //cn_fast_hash(hashes[i], 64, ints[j]);
     }
-    //assert(i == count);
-    // println!("sanity check, {} vs {}", i, count);
 
     while cnt > 2 {
       cnt /= 2;
-      // cnt >>= 1;;
       let mut ii = 0;
       for jj in 0..cnt {
-        // println!("slice point: {}, ii: {}, cnt: {}", slice_point, ii, cnt);
-        // println!("lengths: {}, {}", ints[ii].len(), ints[ii + 1].len());
         ints[jj] = concat_and_hash(&ints[ii], &ints[ii + 1]);
         ii += 2;
-        //cn_fast_hash(ints[i], 64, ints[j]);
       }
     }
-
     return concat_and_hash(&ints[0], &ints[1]).to_vec();
-  }
-}
-
-#[derive(Deserialize, Default)]
-pub struct BlockTemplate {
-  // TODO eventually most of this stuff can be private
-  pub blockhashing_blob: String,
-  pub blocktemplate_blob: String,
-  pub difficulty: u64,
-  pub height: u64,
-  pub prev_hash: String,
-  pub reserved_offset: u32,
-  pub status: String
-}
-
-impl BlockTemplate {
-  pub fn hashing_blob_with_nonce(&self, nonce: &str) -> Option<String> {
-    // TODO document this slicing stuff
-    let miner_tx = format!(
-      "{}{}",
-      &self.blocktemplate_blob[86..((self.reserved_offset * 2 - 2) as usize)],
-      nonce
-    );
-    let miner_tx_hash = keccak(&byte_string::string_to_u8_array(&miner_tx))[..32].to_vec();
-    let hex_digits_left = (self.blocktemplate_blob.len() - miner_tx.len()) - 86;
-    if (hex_digits_left - 2) % 64 != 0 {
-      println!("{}", hex_digits_left);
-      return None;
-    }
-    let mut tx_hashes = Vec::new();
-    tx_hashes.push(miner_tx_hash);
-    for tx_index in 0..(hex_digits_left / 64) {
-      // TODO make these numbers less magic, maybe just increment an index for readability
-      // TODO the "2" here assumes 1 byte for transaction count, that needs to be a varint as well
-      let start = miner_tx.len() + 86 + 2 + 64 * tx_index;
-      tx_hashes.push(byte_string::string_to_u8_array(&self.blocktemplate_blob[start..(start + 64)]));
-    }
-    let num_hashes = tx_hashes.len();
-    let root_hash: Vec<String> = tree_hash(tx_hashes).iter()
-      .map(|b| format!("{:02x}", b))
-      .collect();
-    // TODO the count needs to be a varint since we can have more than 255 transactions in a block
-    return Some(
-      format!("{}{}{:02x}", &self.blockhashing_blob[..86], &root_hash.join(""), num_hashes)
-    );
   }
 }
