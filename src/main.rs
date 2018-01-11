@@ -26,6 +26,7 @@ extern crate regex;
 mod config;
 mod server;
 mod cryptonightlite;
+mod longkeccak;
 mod data;
 
 fn main() {

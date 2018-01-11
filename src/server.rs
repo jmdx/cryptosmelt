@@ -18,7 +18,7 @@ use cryptonightlite;
 use config::*;
 use data::InfluxClient;
 use regex::Regex;
-use cryptonightlite::keccak;
+use longkeccak::keccak;
 
 enum HashType {
   Cryptonight,
@@ -37,7 +37,7 @@ fn cn_hash(input: Vec<u8>, hash_type: HashType) -> String {
 #[test]
 fn test_hash() {
   let input = byte_string::string_to_u8_array("");
-  assert_eq!(cn_hash(input.to_owned(), HashType::Cryptonight),"eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
+  assert_eq!(cn_hash(input.to_owned(), HashType::Cryptonight), "eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
   // Test case taken from https://github.com/ExcitableAardvark/node-cryptonight-lite
   assert_eq!(cn_hash(input.to_owned(), HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
   let input2 = byte_string::string_to_u8_array("5468697320697320612074657374");
@@ -130,22 +130,6 @@ fn parse_block_template(template: Vec<u8>) {
   // plus 1
 }
 
-// TODO place this somewhere more suitable
-#[test]
-fn test_keccak() {
-  let test_input = "fa22874bcc068879e8ef11a69f0722";
-  assert_eq!(keccak(&byte_string::string_to_u8_array(test_input))[..32].to_vec(),
-             byte_string::string_to_u8_array(
-               "f20b3bcf743aa6fa084038520791c364cb6d3d1dd75841f8d7021cd98322bd8f").to_vec());
-  let test_input_2 = "ea40e83cb18b3a242c1ecc6ccd0b7853a439dab2c569cfc6dc38a19f5c90acbf76aef9e\
-  a3742ff3b54ef7d36eb7ce4ff1c9ab3bc119cff6be93c03e208783335c0ab8137be5b10cdc66ff3f89a1bddc6a1eed74f\
-  504cbe7290690bb295a872b9e3fe2cee9e6c67c41db8efd7d863cf10f840fe618e7936da3dca5ca6df933f24f6954ba08\
-  01a1294cd8d7e66dfafec";
-  assert_eq!(keccak(&byte_string::string_to_u8_array(test_input_2))[..32].to_vec(),
-             byte_string::string_to_u8_array(
-    "344d129c228359463c40555d94213d015627e5871c04f106a0feef9361cdecb6").to_vec());
-}
-
 #[test]
 fn test_parse_block_template() {
   let test_block = BlockTemplate {
@@ -226,7 +210,7 @@ fn tree_hash(hashes: Vec<Vec<u8>>) -> Vec<u8> {
     // let ints_size = cnt * HASH_SIZE;
     // ints = alloca(ints_size);
     let mut ints: Vec<Vec<u8>> = Vec::new();
-    let slice_point = (2 * cnt - count);
+    let slice_point = 2 * cnt - count;
     // memcpy(ints, hashes, (2 * cnt - count) * HASH_SIZE);
     for i in 0..slice_point {
       ints.push(hashes[i].clone())
