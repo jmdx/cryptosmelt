@@ -27,6 +27,7 @@ mod config;
 mod server;
 mod cryptonightlite;
 mod longkeccak;
+mod blocktemplate;
 mod data;
 
 fn main() {
