@@ -1,9 +1,8 @@
 use jsonrpc_core::*;
 use jsonrpc_core::serde_json::{Map};
 use jsonrpc_tcp_server::*;
-use std::u32;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::result::Result as StdResult;
 use concurrent_hashmap::*;
 use uuid::*;
@@ -52,7 +51,7 @@ struct Job {
   height: u64,
   difficulty: u64,
   diff_hex: String,
-  template: Arc<Mutex<BlockTemplate>>,
+  template: Arc<RwLock<BlockTemplate>>,
   submissions: ConcHashMap<String, bool>,
 }
 
@@ -72,7 +71,7 @@ impl Job {
     // TODO check if the block is expired, may want to do away with the template reference and just
     // check against the current template, since anything of a lower height will be expired as long
     // as we only keep one template per height
-    let blob = &self.template.lock().unwrap().blockhashing_blob;
+    let blob = &self.template.read().unwrap().blockhashing_blob;
     let (a, _) = blob.split_at(78);
     let (_, b) = blob.split_at(86);
     let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", a, nonce, b));
@@ -118,7 +117,7 @@ impl Miner {
     full_diff_hexes.join("") + "00"
   }
 
-  fn get_job(&self, current_template: &Arc<Mutex<BlockTemplate>>) -> Result<Value> {
+  fn get_job(&self, current_template: &Arc<RwLock<BlockTemplate>>) -> Result<Value> {
     // Notes on the block template:
     // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce
     // - the daemon returns result.reserved_offset, and that many bytes into
@@ -127,7 +126,7 @@ impl Miner {
     // - it might not even be necessary to use any counters
     //   (and just go with the first 8 bytes of the miner id)
     let arc_template = current_template.clone();
-    let template_data = arc_template.lock().unwrap();
+    let template_data = arc_template.read().unwrap();
     let job_id = &Uuid::new_v4().to_string();
     // TODO remove the bytes dependency if we don't use it
     //let mut buf = BytesMut::with_capacity(128);
@@ -162,7 +161,7 @@ struct PoolServer {
   config: ServerConfig,
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
-  block_template: Arc<Mutex<BlockTemplate>>,
+  block_template: Arc<RwLock<BlockTemplate>>,
   db: Arc<InfluxClient>,
   address_pattern: Regex,
 }
@@ -172,7 +171,7 @@ impl PoolServer {
     PoolServer {
       config: server_config.clone(),
       miner_connections: Default::default(),
-      block_template: Arc::new(Mutex::new(Default::default())),
+      block_template: Arc::new(RwLock::new(Default::default())),
       db,
       address_pattern: Regex::new("[a-zA-Z0-9]").unwrap()
     }
@@ -327,7 +326,7 @@ pub fn init(config: Config) {
 
   // TODO make sure we refresh the template after every successful submit
   let thread_config_ref = inner_config_ref.clone();
-  let tick = periodic_ms(10000);
+  let tick = periodic_ms(2000);
   loop {
     let params = json!({
         "wallet_address": thread_config_ref.pool_wallet,
@@ -339,10 +338,10 @@ pub fn init(config: Config) {
         // TODO verify that checking the height (and not prev_hash) is sufficient
         if let Some(result) = template.get("result") {
           for server in servers.iter() {
-            let mut current_template = server.block_template.lock().unwrap();
             let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
               serde_json::from_value(result.clone());
             if let Ok(new_template) = parsed_template {
+              let mut current_template = server.block_template.write().unwrap();
               if new_template.height > current_template.height {
                 println!("New block template of height {}.", new_template.height);
                 *current_template = new_template;

@@ -172,7 +172,7 @@ fn tree_hash(hashes: Vec<Vec<u8>>) -> Vec<u8> {
     for i in 0..slice_point {
       ints.push(hashes[i].clone())
     }
-    for i in slice_point..count {
+    for _ in slice_point..count {
       ints.push(vec![0]);
     }
     let mut i = slice_point;
