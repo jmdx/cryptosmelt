@@ -87,7 +87,7 @@ impl PoolServer {
       miner_connections: Default::default(),
       job_provider,
       db,
-      address_pattern: Regex::new("[a-zA-Z0-9]").unwrap(),
+      address_pattern: Regex::new("[a-zA-Z0-9]+").unwrap(),
     }
   }
 
@@ -120,6 +120,9 @@ impl PoolServer {
     if let Some(&Value::String(ref login)) = params.get("login") {
       let id = &Uuid::new_v4().to_string();
       // TODO add some validation on the login address
+      if !self.address_pattern.is_match(login) {
+        return Err(Error::invalid_params("Miner ID must be alphanumeric"));
+      }
       let miner = Miner {
         miner_id: id.to_owned(),
         login: login.to_owned(),
@@ -173,9 +176,15 @@ pub fn init(config: Config) {
   let config_ref = Arc::new(config);
   let influx_client = Arc::new(InfluxClient::new(config_ref.clone()));
   let inner_config_ref = config_ref.clone();
+  let hash_type = match config_ref.hash_type.to_lowercase().as_ref() {
+    "cryptonight" => HashType::Cryptonight,
+    "cryptonightlite" => HashType::CryptonightLite,
+    _ => panic!("Invalid hash type in config.toml"),
+  };
   let job_provider = Arc::new(JobProvider::new(
     inner_config_ref.daemon_url.to_owned(),
     inner_config_ref.pool_wallet.to_owned(),
+    hash_type,
   ));
   let servers: Vec<Arc<PoolServer>> = config_ref.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);

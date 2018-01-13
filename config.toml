@@ -1,6 +1,13 @@
+# The values in this config are usable with https://github.com/moneroexamples/private-testnet
+
+hash_type="cryptonight"
 influx_url="http://localhost:8086"
-daemon_url="http://node.aeon-wallet.net:11181/json_rpc"
-pool_wallet=""
+daemon_url="http://localhost:38081/json_rpc"
+pool_wallet="9wviCeWe2D8XS82k2ovp5EUYLzBt9pYNW2LXUFsZiv8S3Mt21FZ5qQaAroko1enzw3eGr9qC7X1D7Geoo2RrAotYPwq9Gm8"
+
+[[ports]]
+port = 11336
+difficulty = 50
 
 [[ports]]
 port = 11337
