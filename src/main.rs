@@ -28,6 +28,7 @@ mod server;
 mod cryptonightlite;
 mod longkeccak;
 mod blocktemplate;
+mod daemon_client;
 mod data;
 
 fn main() {

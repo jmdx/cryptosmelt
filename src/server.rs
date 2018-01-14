@@ -13,6 +13,7 @@ use config::*;
 use data::InfluxClient;
 use regex::Regex;
 use blocktemplate::*;
+use daemon_client::*;
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
@@ -57,6 +58,7 @@ impl Metadata for Meta {}
 
 struct PoolServer {
   config: ServerConfig,
+  daemon: Arc<DaemonClient>,
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
   job_provider: Arc<JobProvider>,
@@ -65,10 +67,12 @@ struct PoolServer {
 }
 
 impl PoolServer {
-  fn new(server_config: &ServerConfig, db: Arc<InfluxClient>, job_provider: Arc<JobProvider>)
+  fn new(server_config: &ServerConfig, daemon: Arc<DaemonClient>, db: Arc<InfluxClient>,
+         job_provider: Arc<JobProvider>)
          -> PoolServer {
     PoolServer {
       config: server_config.clone(),
+      daemon,
       miner_connections: Default::default(),
       job_provider,
       db,
@@ -144,13 +148,12 @@ impl PoolServer {
               // server becomes fully auditable by connected miners
               // TODO split this up so it's not so deeply nested
               JobResult::BlockFound(block) => {
-                let params = json!([block]);
                 // TODO move some of this over to a method on JobProvider, do something with the
                 // result
-                let _submission = call_daemon(&self.job_provider.daemon_url, "submitblock", params);
+                let _submission = self.daemon.submit_block(&block);
                 let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
                 // TODO mining software seems reluctant to grab a job with the new template
-                //self.job_provider.refresh();
+                self.job_provider.refresh();
                 match self.db.write(&to_insert) {
                   Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
                   Err(_) => Err(Error::internal_error())
@@ -176,21 +179,23 @@ impl PoolServer {
 pub fn init(config: Config) {
   let config_ref = Arc::new(config);
   let influx_client = Arc::new(InfluxClient::new(config_ref.clone()));
+  // TODO clean up all of these superfluous _ref's
   let inner_config_ref = config_ref.clone();
+  let daemon_client = Arc::new(DaemonClient::new(inner_config_ref.clone()));
   let hash_type = match config_ref.hash_type.to_lowercase().as_ref() {
     "cryptonight" => HashType::Cryptonight,
     "cryptonightlite" => HashType::CryptonightLite,
     _ => panic!("Invalid hash type in config.toml"),
   };
   let job_provider = Arc::new(JobProvider::new(
-    inner_config_ref.daemon_url.to_owned(),
+    daemon_client.clone(),
     inner_config_ref.pool_wallet.to_owned(),
     hash_type,
   ));
   let servers: Vec<Arc<PoolServer>> = config_ref.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     let pool_server: Arc<PoolServer> = Arc::new(
-      PoolServer::new(server_config, influx_client.clone(), job_provider.clone())
+      PoolServer::new(server_config, daemon_client.clone(),influx_client.clone(), job_provider.clone())
     );
     let login_ref = pool_server.clone();
     io.add_method_with_meta("login", move |params, meta: Meta| {

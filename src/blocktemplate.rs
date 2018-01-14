@@ -12,6 +12,7 @@ use mithril::cryptonight::*;
 use cryptonightlite;
 use concurrent_hashmap::*;
 use reqwest;
+use daemon_client::DaemonClient;
 
 #[derive(Clone)]
 pub enum HashType {
@@ -111,22 +112,6 @@ impl Job {
   }
 }
 
-// TODO this will probably go in another file
-pub fn call_daemon(daemon_url: &str, method: &str, params: Value)
-               -> reqwest::Result<Value> {
-  let map = json!({
-    "jsonrpc": Value::String("2.0".to_owned()),
-    "id": Value::String("0".to_owned()),
-    "method": Value::String(method.to_owned()),
-    "params": params,
-  });
-  let client = reqwest::Client::new();
-  let mut res = client.post(daemon_url)
-    .json(&map)
-    .send()?;
-  res.json()
-}
-
 /// Returns a representation of the miner's current difficulty, in a hex format which is sort of
 /// a quirk of the stratum protocol.
 fn get_target_hex(difficulty: u64) -> String {
@@ -153,17 +138,17 @@ pub struct JobProvider {
   // TODO eventually everything here should be private
   pub template: RwLock<BlockTemplate>,
   nonce: AtomicUsize,
-  pub daemon_url: String,
+  daemon: Arc<DaemonClient>,
   pool_wallet: String,
   hash_type: HashType,
 }
 
 impl JobProvider {
-  pub fn new(daemon_url: String, pool_wallet: String, hash_type: HashType) -> JobProvider {
+  pub fn new(daemon: Arc<DaemonClient>, pool_wallet: String, hash_type: HashType) -> JobProvider {
     JobProvider {
       template: RwLock::new(Default::default()),
       nonce: AtomicUsize::new(0),
-      daemon_url,
+      daemon,
       pool_wallet,
       hash_type,
     }
@@ -202,11 +187,7 @@ impl JobProvider {
   }
 
   pub fn refresh(&self) {
-    let params = json!({
-      "wallet_address": self.pool_wallet,
-      "reserve_size": 8
-    });
-    let template = call_daemon(&self.daemon_url, "getblocktemplate", params);
+    let template = self.daemon.get_block_template();
     match template {
       Ok(template) => {
         // TODO verify that checking the height (and not prev_hash) is sufficient
