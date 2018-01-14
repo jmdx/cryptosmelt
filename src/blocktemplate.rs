@@ -2,6 +2,9 @@ use longkeccak::keccak;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::result::Result as StdResult;
+use std::cmp::min;
+use num_bigint::*;
+use num_integer::*;
 use uuid::*;
 use jsonrpc_core::*;
 use mithril::byte_string;
@@ -35,6 +38,12 @@ fn test_hash() {
   assert_eq!(cn_hash(input2, &HashType::CryptonightLite), "88e5e684db178c825e4ce3809ccc1cda79cc2adb4406bff93debeaf20a8bebd9");
 }
 
+pub enum JobResult {
+  BlockFound(String),
+  SharesAccepted,
+  SharesRejected,
+}
+
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
 pub struct Job {
@@ -44,21 +53,27 @@ pub struct Job {
   pub difficulty: u64,
   pub diff_hex: String,
   pub hashing_blob: String,
+  // TODO consider just keeping an Arc to the original template, storing this stuff is redundant
+  pub template_blob: String,
+  pub extra_nonce: String,
+  pub reserved_offset: u32,
+  pub network_difficulty: u64,
   submissions: ConcHashMap<String, bool>,
 }
 
 impl Job {
-  pub fn submit(&self, nonce: &String) -> Result<Value> {
+  pub fn submit(&self, nonce: &String) -> JobResult {
     if nonce.len() != 8 {
       // We expect a hex representing a 32 bit integer.  We don't care so much about validating that
       // it is purely hexadecimal chaaracters, though, since string_to_u8_array will just zero out
       // anything non-hexadecimal.
-      return Err(Error::invalid_params("Nonce must be 8 hexadecimal characters"));
+      // TODO actually, probably check that it's hex to be safe
+      return JobResult::SharesRejected;
     }
     let previous_submission = self.submissions.insert(nonce.to_owned(), true);
     if let Some(_) = previous_submission {
       // TODO we'll probably want some auto banning functionality in place here
-      return Err(Error::invalid_params("Nonce already submitted"));
+      return JobResult::SharesRejected;
     }
     // TODO check if the block is expired, may want to do away with the template reference and just
     // check against the current template, since anything of a lower height will be expired as long
@@ -67,24 +82,37 @@ impl Job {
     let (a, _) = blob.split_at(78);
     let (_, b) = blob.split_at(86);
     let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", a, nonce, b));
-    println!("Blob to hash: {}\n {} {} {}", blob, a, nonce, b);
     let hash = cn_hash(hash_input, &self.hash_type);
     let hash_val = byte_string::hex2_u64_le(&hash[48..]);
     // TODO not entirely sure if the line below is correct
     let achieved_difficulty = u64::max_value() / hash_val;
-    println!("Hash value: {}, hash: {}, ratio: {}", hash_val, hash, achieved_difficulty);
     if achieved_difficulty >= self.difficulty {
-      println!("Valid job submission");
-      return Ok(Value::String("Result accepted".to_owned()));
+      if achieved_difficulty >= self.network_difficulty {
+        println!("Valid block candidate");
+        let start_blob = &self.template_blob[..78];
+        // TODO is there a good reason for "- 2"?
+        let middle_blob = &self.template_blob[86..(self.reserved_offset as usize * 2 - 2)];
+        let end_blob = &self.template_blob[(self.reserved_offset as usize * 2 + 16)..];
+        let block_candidate = format!(
+          "{}{}{}{}{}",
+          start_blob,
+          nonce,
+          middle_blob,
+          self.extra_nonce,
+          end_blob
+        );
+        return JobResult::BlockFound(block_candidate);
+      }
+      return JobResult::SharesAccepted;
     } else {
       println!("Bad job submission");
     }
-    Err(Error::internal_error())
+    JobResult::SharesRejected
   }
 }
 
 // TODO this will probably go in another file
-fn call_daemon(daemon_url: &str, method: &str, params: Value)
+pub fn call_daemon(daemon_url: &str, method: &str, params: Value)
                -> reqwest::Result<Value> {
   let map = json!({
     "jsonrpc": Value::String("2.0".to_owned()),
@@ -99,11 +127,33 @@ fn call_daemon(daemon_url: &str, method: &str, params: Value)
   res.json()
 }
 
+/// Returns a representation of the miner's current difficulty, in a hex format which is sort of
+/// a quirk of the stratum protocol.
+fn get_target_hex(difficulty: u64) -> String {
+  let difficulty_big_endian = format!("{:08x}", 0xffffffff / difficulty);
+  format!(
+    "{}{}{}{}",
+    // This isn't a particularly elegant way of converting, but miners expect exactly 4
+    // little-endian bytes so it's safe.
+    &difficulty_big_endian[6..],
+    &difficulty_big_endian[4..6],
+    &difficulty_big_endian[2..4],
+    &difficulty_big_endian[..2],
+  )
+}
+
+#[test]
+fn target_hex_correct() {
+  assert_eq!(get_target_hex(5000), "711b0d00");
+  assert_eq!(get_target_hex(20000), "dc460300");
+  assert_eq!(get_target_hex(1), "ffffffff");
+}
+
 pub struct JobProvider {
   // TODO eventually everything here should be private
   pub template: RwLock<BlockTemplate>,
   nonce: AtomicUsize,
-  daemon_url: String,
+  pub daemon_url: String,
   pool_wallet: String,
   hash_type: HashType,
 }
@@ -119,25 +169,32 @@ impl JobProvider {
     }
   }
 
-  pub fn get_job(&self, difficulty: u64, target_hex: String) -> Option<Job> {
-    // TODO maybe just accept a difficulty and do target hex stuff here
+  pub fn get_job(&self, difficulty: u64) -> Option<Job> {
+    // The network difficulty typically only exceeds the network difficulty shortly after firing
+    // up a testnet.  Aside from that, sending out jobs higher than the network difficulty would
+    // be unlikely, but undesirable, since it would mean telling miners not to send in completed
+    // blocks.
     let job_id = &Uuid::new_v4().to_string();
-    // TODO remove the bytes dependency if we don't use it
-    //let mut buf = BytesMut::with_capacity(128);
-    // TODO at least do something to the reserved bytes
     let template_data = self.template.read().unwrap();
+    let capped_difficulty = min(difficulty, template_data.difficulty);
+    let target_hex = get_target_hex(capped_difficulty);
     let new_nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
     // TODO maybe hashing_blob_with_nonce should take in a u64
-    let new_blob = template_data.hashing_blob_with_nonce(&format!("{:016x}", new_nonce));
+    let extra_nonce = &format!("{:016x}", new_nonce);
+    let new_blob = template_data.hashing_blob_with_nonce(extra_nonce);
     // TODO do this more idiomatically
     match new_blob {
       Some(new_blob) => Some(Job {
         id: job_id.to_owned(),
         hash_type: self.hash_type.clone(),
         height: template_data.height,
-        difficulty: difficulty,
+        difficulty: capped_difficulty,
         diff_hex: target_hex,
         hashing_blob: new_blob,
+        template_blob: template_data.blocktemplate_blob.to_owned(),
+        extra_nonce: extra_nonce.to_owned(),
+        reserved_offset: template_data.reserved_offset,
+        network_difficulty: template_data.difficulty,
         submissions: Default::default(),
       }),
       None => None
@@ -158,7 +215,7 @@ impl JobProvider {
             serde_json::from_value(result.clone());
           if let Ok(new_template) = parsed_template {
             let mut current_template = self.template.write().unwrap();
-            if new_template.height > current_template.height {
+            if new_template.prev_hash != current_template.prev_hash {
               println!("New block template of height {}.", new_template.height);
               *current_template = new_template;
             }
@@ -193,9 +250,7 @@ impl BlockTemplate {
     );
     let miner_tx_hash = keccak(&byte_string::string_to_u8_array(&miner_tx))[..32].to_vec();
     let hex_digits_left = (self.blocktemplate_blob.len() - miner_tx.len()) - 86;
-    println!("nonce: {}", nonce);
     if (hex_digits_left - 2) % 64 != 0 {
-      println!("{}, {}, {}", hex_digits_left, self.reserved_offset, self.blocktemplate_blob);
       return None;
     }
     let mut tx_hashes = Vec::new();

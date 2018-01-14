@@ -9,8 +9,6 @@ use uuid::*;
 use reqwest;
 use schedule_recv::periodic_ms;
 use std::thread;
-use num_bigint::*;
-use num_integer::*;
 use config::*;
 use data::InfluxClient;
 use regex::Regex;
@@ -28,19 +26,6 @@ struct Miner {
 }
 
 impl Miner {
-  /// Returns a representation of the miner's current difficulty, in a hex format which is sort of
-  /// a quirk of the stratum protocol.
-  fn get_target_hex(&self) -> String {
-    let min_diff = BigInt::parse_bytes(
-      b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16).unwrap();
-    let full_diff = min_diff.div_floor(&BigInt::from(self.difficulty));
-    let (_, full_diff_le) = full_diff.to_bytes_le();
-    let full_diff_hexes: Vec<String> = full_diff_le[(full_diff_le.len() - 3)..].iter()
-      .map(|b| format!("{:02x}", b))
-      .collect();
-    full_diff_hexes.join("") + "00"
-  }
-
   fn get_job(&self, job_provider: &Arc<JobProvider>) -> Result<Value> {
     // Notes on the block template:
     // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce
@@ -49,7 +34,7 @@ impl Miner {
     // - the node pools use a global counter, but we might want the counter to be per-miner
     // - it might not even be necessary to use any counters
     //   (and just go with the first 8 bytes of the miner id)
-    if let Some(new_job) = job_provider.get_job(self.difficulty, self.get_target_hex()) {
+    if let Some(new_job) = job_provider.get_job(self.difficulty) {
       // TODO maybe this method is superfluous now since it's mostly a passthrough
       // TODO probably cap the number of active jobs per miner
       let response = Ok(json!({
@@ -147,23 +132,39 @@ impl PoolServer {
 
   fn submit(&self, params: Map<String, Value>) -> Result<Value> {
     if let Some(miner) = self.getminer(&params) {
+      if !self.address_pattern.is_match(&miner.login) {
+        return Err(Error::invalid_params("Miner ID must be alphanumeric"));
+      }
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {
         if let Some(job) = miner.jobs.find(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
-            println!("nonce: {}", nonce);
             let job = job.get();
-            return job.submit(nonce).and_then(|_| {
-              if !self.address_pattern.is_match(&miner.login) {
-                return Err(Error::invalid_params("Miner ID must be alphanumeric"));
-              }
+            return match job.submit(nonce) {
               // TODO maybe insert the nonce and template, that would be cool because then the
               // server becomes fully auditable by connected miners
-              let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
-              match self.db.write(&to_insert) {
-                Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
-                Err(_) => Err(Error::internal_error())
-              }
-            });
+              // TODO split this up so it's not so deeply nested
+              JobResult::BlockFound(block) => {
+                let params = json!([block]);
+                // TODO move some of this over to a method on JobProvider, do something with the
+                // result
+                let _submission = call_daemon(&self.job_provider.daemon_url, "submitblock", params);
+                let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
+                // TODO mining software seems reluctant to grab a job with the new template
+                //self.job_provider.refresh();
+                match self.db.write(&to_insert) {
+                  Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
+                  Err(_) => Err(Error::internal_error())
+                }
+              },
+              JobResult::SharesAccepted => {
+                let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
+                match self.db.write(&to_insert) {
+                  Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
+                  Err(_) => Err(Error::internal_error())
+                }
+              },
+              JobResult::SharesRejected => Err(Error::invalid_params("Share rejected")),
+            }
           }
         }
       }
@@ -242,19 +243,4 @@ pub fn init(config: Config) {
     job_provider.refresh();
     tick.recv().unwrap();
   }
-}
-
-#[test]
-fn target_hex_correct() {
-  let mut miner = Miner {
-    miner_id: String::new(),
-    login: String::new(),
-    password: String::new(),
-    peer_addr: "127.0.0.1:3333".parse().unwrap(),
-    difficulty: 5000,
-    jobs: Default::default(),
-  };
-  assert_eq!(miner.get_target_hex(), "711b0d00");
-  miner.difficulty = 20000;
-  assert_eq!(miner.get_target_hex(), "dc460300");
 }
