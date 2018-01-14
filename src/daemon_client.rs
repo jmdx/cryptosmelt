@@ -4,12 +4,12 @@ use jsonrpc_core::*;
 use reqwest;
 use config::Config;
 
-// TODO this will probably go in another file
 
 pub struct DaemonClient {
   config: Arc<Config>,
 }
 
+/// Handles calls to the monero/aeon/etc. network, via the configured daemon_url.
 impl DaemonClient {
   pub fn new(config: Arc<Config>) -> DaemonClient {
     DaemonClient {

@@ -10,10 +10,11 @@ use reqwest;
 use schedule_recv::periodic_ms;
 use std::thread;
 use config::*;
-use data::InfluxClient;
 use regex::Regex;
 use blocktemplate::*;
 use daemon_client::*;
+use unlocker::Unlocker;
+use influx_db_client::{Client, Point, Points, Precision, Value as IxValue};
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
@@ -62,12 +63,12 @@ struct PoolServer {
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
   job_provider: Arc<JobProvider>,
-  db: Arc<InfluxClient>,
+  db: Arc<Client>,
   address_pattern: Regex,
 }
 
 impl PoolServer {
-  fn new(server_config: &ServerConfig, daemon: Arc<DaemonClient>, db: Arc<InfluxClient>,
+  fn new(server_config: &ServerConfig, daemon: Arc<DaemonClient>, db: Arc<Client>,
          job_provider: Arc<JobProvider>)
          -> PoolServer {
     PoolServer {
@@ -151,20 +152,26 @@ impl PoolServer {
                 // TODO move some of this over to a method on JobProvider, do something with the
                 // result
                 let _submission = self.daemon.submit_block(&block);
-                let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
                 // TODO mining software seems reluctant to grab a job with the new template
                 self.job_provider.refresh();
-                match self.db.write(&to_insert) {
-                  Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
-                  Err(_) => Err(Error::internal_error())
-                }
+                let mut share_log = Point::new("valid_share");
+                share_log.add_tag("address", IxValue::String(miner.login.to_owned()));
+                share_log.add_field("value", IxValue::Integer(job.difficulty as i64));
+                let mut submission_log = Point::new("block_status");
+                submission_log.add_tag("block", IxValue::String(block));
+                submission_log.add_field("height", IxValue::Integer(job.height as i64));
+                submission_log.add_field("status", IxValue::String("submitted".to_owned()));
+                let mut to_insert = Points::new(share_log);
+                to_insert.push(submission_log);
+                let _ = self.db.write_points(to_insert, Some(Precision::Seconds), None).unwrap();
+                Ok(Value::String("Submission accepted".to_owned()))
               },
               JobResult::SharesAccepted => {
-                let to_insert = format!("valid_share,address={} value={}", miner.login, job.difficulty);
-                match self.db.write(&to_insert) {
-                  Ok(_) => Ok(Value::String("Submission accepted".to_owned())),
-                  Err(_) => Err(Error::internal_error())
-                }
+                let mut share_log = Point::new("valid_share");
+                share_log.add_tag("address", IxValue::String(miner.login.to_owned()));
+                share_log.add_field("value", IxValue::Integer(job.difficulty as i64));
+                let _ = self.db.write_point(share_log, Some(Precision::Seconds), None).unwrap();
+                Ok(Value::String("Submission accepted".to_owned()))
               },
               JobResult::SharesRejected => Err(Error::invalid_params("Share rejected")),
             }
@@ -178,10 +185,12 @@ impl PoolServer {
 
 pub fn init(config: Config) {
   let config_ref = Arc::new(config);
-  let influx_client = Arc::new(InfluxClient::new(config_ref.clone()));
+  // TODO pull in the influx url from the config
+  let influx_client = Arc::new(Client::default());
   // TODO clean up all of these superfluous _ref's
   let inner_config_ref = config_ref.clone();
   let daemon_client = Arc::new(DaemonClient::new(inner_config_ref.clone()));
+  let unlocker = Unlocker::new(daemon_client.clone(), influx_client.clone());
   let hash_type = match config_ref.hash_type.to_lowercase().as_ref() {
     "cryptonight" => HashType::Cryptonight,
     "cryptonightlite" => HashType::CryptonightLite,
@@ -192,6 +201,7 @@ pub fn init(config: Config) {
     inner_config_ref.pool_wallet.to_owned(),
     hash_type,
   ));
+  // TODO make this just a for loop, no longer needs to be a map/collect
   let servers: Vec<Arc<PoolServer>> = config_ref.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     let pool_server: Arc<PoolServer> = Arc::new(
@@ -246,6 +256,7 @@ pub fn init(config: Config) {
   let tick = periodic_ms(2000);
   loop {
     job_provider.refresh();
+    unlocker.refresh();
     tick.recv().unwrap();
   }
 }

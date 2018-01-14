@@ -23,6 +23,8 @@ blake = "2.0.0"
 jh-ffi = "0.0.2"
 skein-ffi = "0.0.1"
 
+influx_db_client = "^0.3.1"
+
 [dependencies.mithril]
 git = 'https://github.com/Ragnaroek/mithril'
 # TODO freeze the version here

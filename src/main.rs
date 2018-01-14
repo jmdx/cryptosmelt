@@ -21,6 +21,8 @@ extern crate blake;
 extern crate jhffi;
 extern crate skeinffi;
 extern crate regex;
+#[macro_use]
+extern crate influx_db_client;
 
 
 mod config;
@@ -29,7 +31,7 @@ mod cryptonightlite;
 mod longkeccak;
 mod blocktemplate;
 mod daemon_client;
-mod data;
+mod unlocker;
 
 fn main() {
   let config = config::read_config();
