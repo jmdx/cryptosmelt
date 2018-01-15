@@ -1,5 +1,6 @@
 #![feature(i128_type)]
 #![feature(box_syntax)]
+#![feature(slice_patterns)]
 
 #[macro_use]
 extern crate serde_derive;
