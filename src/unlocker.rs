@@ -29,20 +29,56 @@ impl Unlocker {
     }
   }
 
-  pub fn process_payments(&self, block_id: &str) {
+  pub fn assign_balances(&self, block_id: &str, reward: u64) {
     // TODO process the payments
-
+    let blocks = self.db.query(
+      "SELECT last(*) FROM block_status WHERE status = 'unlocked'",
+      None,
+    );
+    let results = Unlocker::unwrap_query_results(blocks);
+    let mut time_filter = "".to_owned();
+    for result in results {
+      match result.as_slice() {
+        &[SjValue::String(ref timestamp), ..] => {
+          time_filter = format!("WHERE time > '{}'", timestamp);
+        },
+        _ => {}
+      }
+    }
+    let shares= Unlocker::unwrap_query_results(self.db.query(
+      &format!("SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address)", time_filter),
+      None,
+    ));
+    let share_counts: Vec<(u64, String)> = shares.iter().map(|share| {
+      match share.as_slice() {
+        &[SjValue::String(ref _timestamp), SjValue::String(ref address),
+          SjValue::Number(ref shares)] => {
+          (shares.as_u64().unwrap(), address.to_owned())
+        },
+        _ => (0, "".to_owned())
+      }
+    }).collect();
+    let total_shares: u64 = share_counts.iter().map(|&(count, _)| count).sum();
+    let mut share_inserts = Points::create_new(vec![]);
+    for (share_count, address) in share_counts {
+      let balance_change = (share_count as u128 * reward as u128) / total_shares as u128;
+      let mut share_insert = Point::new("miner_balance");
+      share_insert.add_tag("address", Value::String(address.to_owned()));
+      share_insert.add_field("change", Value::Integer(balance_change as i64));
+      share_inserts.push(share_insert);
+    }
     let mut unlocked = Point::new("block_status");
     unlocked.add_tag("block", Value::String(block_id.to_owned()));
     unlocked.add_field("status", Value::String("unlocked".to_owned()));
     let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+    let _ = self.db.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
   }
 
   pub fn refresh(&self) {
     let blocks = self.db.query(
       "SELECT * FROM (\
             SELECT block, last(status) as last_status, height \
-            FROM cryptosmelt.autogen.block_status \
+            FROM block_status \
             GROUP BY block\
           ) WHERE last_status = 'submitted'",
       None,
