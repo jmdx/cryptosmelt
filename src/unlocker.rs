@@ -29,6 +29,15 @@ impl Unlocker {
     }
   }
 
+  pub fn process_payments(&self, block_id: &str) {
+    // TODO process the payments
+
+    let mut unlocked = Point::new("block_status");
+    unlocked.add_tag("block", Value::String(block_id.to_owned()));
+    unlocked.add_field("status", Value::String("unlocked".to_owned()));
+    let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+  }
+
   pub fn refresh(&self) {
     let blocks = self.db.query(
       "SELECT * FROM (\
@@ -47,22 +56,27 @@ impl Unlocker {
           match header_for_height {
             Ok(header) => {
               if &header.hash != block_id {
-                println!("orphaned block {}", block_id);
+                // TODO maybe add a module to keep the code for writes in one place
+                let mut orphaned = Point::new("block_status");
+                orphaned.add_tag("block", Value::String(block_id.to_owned()));
+                orphaned.add_field("status", Value::String("orphaned".to_owned()));
+                let _ = self.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
               }
               else if header.depth >= 60 {
-                println!("unlocked {}", block_id);
+                self.process_payments(block_id);
               }
               else {
-                println!("depth {} for {}", header.depth, block_id);
+                let mut unlocked = Point::new("block_progress");
+                unlocked.add_tag("block", Value::String(block_id.to_owned()));
+                unlocked.add_field("depth", Value::Integer(header.depth as i64));
+                let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
               }
             },
-            // TODO log this
+            // TODO log the cases below, probably want to find out a nice way of doing logs
             _ => {}
           }
         },
-        other => {
-          println!("{:?}", other);
-        }
+        _ => {}
       }
     }
   }
