@@ -151,14 +151,14 @@ impl PoolServer {
               JobResult::BlockFound(block) => {
                 // TODO move some of this over to a method on JobProvider, do something with the
                 // result
-                let _submission = self.daemon.submit_block(&block);
+                let _submission = self.daemon.submit_block(&block.blob);
                 // TODO mining software seems reluctant to grab a job with the new template
                 self.job_provider.refresh();
                 let mut share_log = Point::new("valid_share");
                 share_log.add_tag("address", IxValue::String(miner.login.to_owned()));
                 share_log.add_field("value", IxValue::Integer(job.difficulty as i64));
                 let mut submission_log = Point::new("block_status");
-                submission_log.add_tag("block", IxValue::String(block));
+                submission_log.add_tag("block", IxValue::String(block.id));
                 submission_log.add_field("height", IxValue::Integer(job.height as i64));
                 submission_log.add_field("status", IxValue::String("submitted".to_owned()));
                 let mut to_insert = Points::new(share_log);
@@ -186,7 +186,9 @@ impl PoolServer {
 pub fn init(config: Config) {
   let config_ref = Arc::new(config);
   // TODO pull in the influx url from the config
-  let influx_client = Arc::new(Client::default());
+  let mut db_client = Client::default();
+  db_client.swith_database("cryptosmelt");
+  let influx_client = Arc::new(db_client);
   // TODO clean up all of these superfluous _ref's
   let inner_config_ref = config_ref.clone();
   let daemon_client = Arc::new(DaemonClient::new(inner_config_ref.clone()));
