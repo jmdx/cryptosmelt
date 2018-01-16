@@ -3,6 +3,10 @@
 hash_type="cryptonight"
 influx_url="http://localhost:8086"
 daemon_url="http://localhost:38081/json_rpc"
+wallet_url="http://localhost:38082/json_rpc"
+payment_mixin=2
+min_payment=0.1
+payment_denomination=0.01
 pool_wallet="9wviCeWe2D8XS82k2ovp5EUYLzBt9pYNW2LXUFsZiv8S3Mt21FZ5qQaAroko1enzw3eGr9qC7X1D7Geoo2RrAotYPwq9Gm8"
 pool_fee=1.0
 

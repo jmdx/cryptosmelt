@@ -1,5 +1,5 @@
 use std::sync::*;
-use daemon_client::DaemonClient;
+use daemon_client::*;
 use influx_db_client::*;
 use serde_json::Value as SjValue;
 use config::*;
@@ -35,7 +35,57 @@ impl Unlocker {
           })
         }).collect()
       }
-      _ => vec![],
+      // TODO handle this a bit more gracefully, really all of the panics and unwrap()'s here should
+      // be handled via Result<>
+      err => panic!("Database error {:?}", err),
+    }
+  }
+
+  pub fn refresh(&self) {
+    self.process_blocks();
+    self.process_payments();
+  }
+
+  pub fn process_blocks(&self) {
+    let blocks = self.db.query(
+      "SELECT * FROM (\
+            SELECT block, last(status) as last_status, height \
+            FROM block_status \
+            GROUP BY block\
+          ) WHERE last_status = 'submitted'",
+      None,
+    );
+    for result in Unlocker::unwrap_query_results(blocks) {
+      match result.as_slice() {
+        &[SjValue::String(ref timestamp), SjValue::String(ref _group),
+          SjValue::String(ref block_id), SjValue::Number(ref height),
+          SjValue::String(ref status)] => {
+          let header_for_height = self.daemon.get_block_header(height.as_u64().unwrap());
+          match header_for_height {
+            Ok(header) => {
+              if &header.hash != block_id {
+                // TODO maybe add a module to keep the code for writes in one place
+                let mut orphaned = Point::new("block_status");
+                orphaned.add_tag("block", Value::String(block_id.to_owned()));
+                orphaned.add_field("status", Value::String("orphaned".to_owned()));
+                let _ = self.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
+              }
+              else if header.depth >= 60 {
+                self.assign_balances(block_id, header.reward);
+              }
+              else {
+                let mut unlocked = Point::new("block_progress");
+                unlocked.add_tag("block", Value::String(block_id.to_owned()));
+                unlocked.add_field("depth", Value::Integer(header.depth as i64));
+                let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+              }
+            },
+            // TODO log the cases below, probably want to find out a nice way of doing logs
+            _ => {}
+          }
+        },
+        _ => {}
+      }
     }
   }
 
@@ -81,7 +131,7 @@ impl Unlocker {
     let mut share_counts: Vec<BlockShare> = shares.iter().map(|share| {
       match share.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref address),
-          SjValue::Number(ref shares)] => {
+        SjValue::Number(ref shares)] => {
           BlockShare {
             shares: shares.as_u64().unwrap(),
             address: address.to_owned(),
@@ -108,46 +158,54 @@ impl Unlocker {
     let _ = self.db.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
   }
 
-  pub fn refresh(&self) {
-    let blocks = self.db.query(
-      "SELECT * FROM (\
-            SELECT block, last(status) as last_status, height \
-            FROM block_status \
-            GROUP BY block\
-          ) WHERE last_status = 'submitted'",
+  pub fn process_payments(&self) {
+    let payment_units_per_currency: f64 = 1e12;
+    let owed_payments = self.db.query(
+      &format!("SELECT * FROM (\
+            SELECT sum(change) as sum_change \
+            FROM miner_balance \
+            GROUP BY address\
+          ) WHERE sum_change > {}", self.config.min_payment * payment_units_per_currency),
       None,
     );
-    for result in Unlocker::unwrap_query_results(blocks) {
+    let mut transfers = vec![];
+    let mut balance_changes = Points::create_new(vec![]);
+    for result in Unlocker::unwrap_query_results(owed_payments) {
       match result.as_slice() {
-        &[SjValue::String(ref timestamp), SjValue::String(ref _group),
-          SjValue::String(ref block_id), SjValue::Number(ref height),
-          SjValue::String(ref status)] => {
-          let header_for_height = self.daemon.get_block_header(height.as_u64().unwrap());
-          match header_for_height {
-            Ok(header) => {
-              if &header.hash != block_id {
-                // TODO maybe add a module to keep the code for writes in one place
-                let mut orphaned = Point::new("block_status");
-                orphaned.add_tag("block", Value::String(block_id.to_owned()));
-                orphaned.add_field("status", Value::String("orphaned".to_owned()));
-                let _ = self.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
-              }
-              else if header.depth >= 60 {
-                self.assign_balances(block_id, header.reward);
-              }
-              else {
-                let mut unlocked = Point::new("block_progress");
-                unlocked.add_tag("block", Value::String(block_id.to_owned()));
-                unlocked.add_field("depth", Value::Integer(header.depth as i64));
-                let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
-              }
-            },
-            // TODO log the cases below, probably want to find out a nice way of doing logs
-            _ => {}
-          }
+        &[SjValue::String(ref _timestamp), SjValue::String(ref address),
+          SjValue::Number(ref sum_change)] => {
+          let micro_denomination = self.config.payment_denomination * payment_units_per_currency;
+          let payment = sum_change.as_u64().unwrap() % (micro_denomination as u64);
+          transfers.push(Transfer {
+            address: address.to_owned(),
+            amount: payment,
+          });
+
+          let mut balance_insert = Point::new("miner_balance");
+          balance_insert.add_tag("address", Value::String(address.to_owned()));
+          balance_insert.add_field("change", Value::Integer(-1 * payment as i64));
+          balance_changes.push(balance_insert);
         },
-        _ => {}
+        other => {
+          println!("{:?}", other);
+        }
       }
+    }
+    match self.daemon.transfer(&transfers) {
+      Ok(result) => {
+        // TODO need to make sure transfer addresses or valid are valid or this call will fail
+        for mut balance_change in balance_changes.point.iter_mut() {
+          balance_change.add_tag("payment_transaction", Value::String(result.tx_hash_list[0].to_owned()));
+        }
+        self.db.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
+        for (fee, hash) in result.fee_list.iter().zip(result.tx_hash_list.iter()) {
+          let mut payment_log = Point::new("pool_payment");
+          payment_log.add_tag("transaction_hash", Value::String(hash.to_owned()));
+          payment_log.add_field("fee", Value::Integer(*fee as i64));
+          self.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
+        }
+      },
+      _ => println!("Failed to initiate transfer"),
     }
   }
 }
@@ -158,6 +216,10 @@ fn test_fee_percentages() {
     hash_type: String::new(),
     influx_url: String::new(),
     daemon_url: String::new(),
+    wallet_url: String::new(),
+    payment_mixin: 0,
+    min_payment: 0.0,
+    payment_denomination: 0.0,
     pool_wallet: String::new(),
     pool_fee: 10.0,
     donations: vec![Donation {

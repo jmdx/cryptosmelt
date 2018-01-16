@@ -6,8 +6,11 @@ use toml;
 pub struct Config {
   pub hash_type: String,
   pub influx_url: String,
-  // TODO there will need to be both a wallet and a daemon address
   pub daemon_url: String,
+  pub wallet_url: String,
+  pub payment_mixin: u64,
+  pub min_payment: f64,
+  pub payment_denomination: f64,
   pub pool_wallet: String,
   pub pool_fee: f64,
   pub donations: Vec<Donation>,
