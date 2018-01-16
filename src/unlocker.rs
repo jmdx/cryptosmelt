@@ -2,7 +2,14 @@ use std::sync::*;
 use daemon_client::DaemonClient;
 use influx_db_client::*;
 use serde_json::Value as SjValue;
-use config::Config;
+use config::*;
+
+#[derive(Debug)]
+struct BlockShare {
+  shares: u64,
+  address: String,
+  is_fee: bool,
+}
 
 pub struct Unlocker {
   config: Arc<Config>,
@@ -32,6 +39,25 @@ impl Unlocker {
     }
   }
 
+  /// Appends donation fee shares, and returns the new total count of shares.  The pool fee is
+  /// included in the returned total share count, but not appended to the share counts array, since
+  /// there is no transaction needed to move funds from the pool to itself.
+  pub fn append_fees(&self, share_counts: &mut Vec<BlockShare>) -> u64 {
+    let miner_shares: u64 = share_counts.iter().map(|share| share.shares).sum();
+    let dev_fee_percent: f64 = self.config.donations.iter().map(|donation| donation.percentage).sum();
+    let total_fee_ratio: f64 = (self.config.pool_fee + dev_fee_percent) / 100.0;
+    let miner_share_portion: f64 = 1.0 - total_fee_ratio;
+    let total_shares = (miner_shares as f64 * (1.0 / miner_share_portion)).round() as u64;
+    for &Donation { ref address, ref percentage } in &self.config.donations {
+      share_counts.push(BlockShare {
+        shares: (total_shares as f64 * (percentage / 100.0)).round() as u64,
+        address: address.to_owned(),
+        is_fee: true
+      });
+    }
+    total_shares
+  }
+
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
     // TODO process the payments
     let blocks = self.db.query(
@@ -52,22 +78,27 @@ impl Unlocker {
       &format!("SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address)", time_filter),
       None,
     ));
-    let mut share_counts: Vec<(u64, String)> = shares.iter().map(|share| {
+    let mut share_counts: Vec<BlockShare> = shares.iter().map(|share| {
       match share.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref address),
           SjValue::Number(ref shares)] => {
-          (shares.as_u64().unwrap(), address.to_owned())
+          BlockShare {
+            shares: shares.as_u64().unwrap(),
+            address: address.to_owned(),
+            is_fee: false,
+          }
         },
-        _ => (0, "".to_owned())
+        _ => panic!("Bad response from database while preparing share calculation")
       }
     }).collect();
-    let total_shares: u64 = share_counts.iter().map(|&(count, _)| count).sum();
+    let total_shares = self.append_fees(&mut share_counts);
     let mut share_inserts = Points::create_new(vec![]);
-    for (share_count, address) in share_counts {
-      let balance_change = (share_count as u128 * reward as u128) / total_shares as u128;
+    for BlockShare { shares, address, is_fee } in share_counts {
+      let balance_change = (shares as u128 * reward as u128) / total_shares as u128;
       let mut share_insert = Point::new("miner_balance");
       share_insert.add_tag("address", Value::String(address.to_owned()));
       share_insert.add_field("change", Value::Integer(balance_change as i64));
+      share_insert.add_field("is_fee", Value::Boolean(is_fee));
       share_inserts.push(share_insert);
     }
     let mut unlocked = Point::new("block_status");
@@ -119,4 +150,42 @@ impl Unlocker {
       }
     }
   }
+}
+
+#[test]
+fn test_fee_percentages() {
+  let fee_config = Arc::new(Config {
+    hash_type: String::new(),
+    influx_url: String::new(),
+    daemon_url: String::new(),
+    pool_wallet: String::new(),
+    pool_fee: 10.0,
+    donations: vec![Donation {
+      address: "dev".to_owned(),
+      percentage: 15.0,
+    }],
+    ports: Vec::new(),
+  });
+  let mut example_shares = vec![BlockShare {
+    shares: 150000,
+    address: "miner1".to_owned(),
+    is_fee: false,
+  }, BlockShare {
+    shares: 50000,
+    address: "miner2".to_owned(),
+    is_fee: false,
+  }];
+  let unlocker = Unlocker::new(
+    fee_config.clone(),
+    Arc::new(DaemonClient::new(fee_config.clone())),
+    Arc::new(Default::default()),
+  );
+  let total_shares = unlocker.append_fees(&mut example_shares);
+  // Because the total fee percentage is 25% (an unrealistic but easy-to-reason-about number), 75%
+  // of shares should go to the miners.
+  assert_eq!(total_shares * 3 / 4, 150000 + 50000);
+  // 90% of the shares should be allocated for transactions, the 10% pool fee in our scenario just
+  // sits in the pool wallet.
+  let distributed_shares: u64 = example_shares.iter().map(|share| share.shares).sum();
+  assert_eq!(total_shares * 9 / 10, distributed_shares);
 }
