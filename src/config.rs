@@ -9,7 +9,15 @@ pub struct Config {
   // TODO there will need to be both a wallet and a daemon address
   pub daemon_url: String,
   pub pool_wallet: String,
+  pub pool_fee: f64,
+  pub donations: Vec<Donation>,
   pub ports: Vec<ServerConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Donation {
+  pub address: String,
+  pub percentage: f64,
 }
 
 #[derive(Clone, Deserialize)]

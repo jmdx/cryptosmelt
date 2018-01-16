@@ -2,15 +2,18 @@ use std::sync::*;
 use daemon_client::DaemonClient;
 use influx_db_client::*;
 use serde_json::Value as SjValue;
+use config::Config;
 
 pub struct Unlocker {
+  config: Arc<Config>,
   daemon: Arc<DaemonClient>,
   db: Arc<Client>,
 }
 
 impl Unlocker {
-  pub fn new(daemon: Arc<DaemonClient>, db: Arc<Client>) -> Unlocker {
+  pub fn new(config: Arc<Config>, daemon: Arc<DaemonClient>, db: Arc<Client>) -> Unlocker {
     Unlocker {
+      config,
       daemon,
       db,
     }
@@ -49,7 +52,7 @@ impl Unlocker {
       &format!("SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address)", time_filter),
       None,
     ));
-    let share_counts: Vec<(u64, String)> = shares.iter().map(|share| {
+    let mut share_counts: Vec<(u64, String)> = shares.iter().map(|share| {
       match share.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref address),
           SjValue::Number(ref shares)] => {
@@ -99,7 +102,7 @@ impl Unlocker {
                 let _ = self.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
               }
               else if header.depth >= 60 {
-                self.process_payments(block_id);
+                self.assign_balances(block_id, header.reward);
               }
               else {
                 let mut unlocked = Point::new("block_progress");

@@ -192,7 +192,7 @@ pub fn init(config: Config) {
   // TODO clean up all of these superfluous _ref's
   let inner_config_ref = config_ref.clone();
   let daemon_client = Arc::new(DaemonClient::new(inner_config_ref.clone()));
-  let unlocker = Unlocker::new(daemon_client.clone(), influx_client.clone());
+  let unlocker = Unlocker::new(config_ref.clone(), daemon_client.clone(), influx_client.clone());
   let hash_type = match config_ref.hash_type.to_lowercase().as_ref() {
     "cryptonight" => HashType::Cryptonight,
     "cryptonightlite" => HashType::CryptonightLite,

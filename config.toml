@@ -4,6 +4,11 @@ hash_type="cryptonight"
 influx_url="http://localhost:8086"
 daemon_url="http://localhost:38081/json_rpc"
 pool_wallet="9wviCeWe2D8XS82k2ovp5EUYLzBt9pYNW2LXUFsZiv8S3Mt21FZ5qQaAroko1enzw3eGr9qC7X1D7Geoo2RrAotYPwq9Gm8"
+pool_fee=1.0
+
+[[donations]]
+address="Wmsof1vqt9Z23bfggkVXDscRgkcyejvvDTuWi7AMtjnNaod9SrwqrNQDPzRRDrxA7BAirbySZY9V6K7EPU4A2zzG2D2msfxGX"
+percentage=1.0
 
 [[ports]]
 port = 11336
