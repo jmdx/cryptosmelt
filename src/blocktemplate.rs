@@ -36,7 +36,7 @@ fn test_hash() {
   // Test case taken from https://github.com/ExcitableAardvark/node-cryptonight-lite
   assert_eq!(cn_hash(&input, &HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
   let input2 = byte_string::string_to_u8_array("5468697320697320612074657374");
-  assert_eq!(cn_hash(input2, &HashType::CryptonightLite), "88e5e684db178c825e4ce3809ccc1cda79cc2adb4406bff93debeaf20a8bebd9");
+  assert_eq!(cn_hash(&input2, &HashType::CryptonightLite), "88e5e684db178c825e4ce3809ccc1cda79cc2adb4406bff93debeaf20a8bebd9");
 }
 
 pub struct SuccessfulBlock {

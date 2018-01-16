@@ -29,7 +29,7 @@ influx_db_client = "^0.3.1"
 git = 'https://github.com/Ragnaroek/mithril'
 # TODO freeze the version here
 # TODO document that this means we can't use the stable version of rust
-branch = 'master'
+rev = 'b45fd61b94d105411f21e3ab144a5707ba444331'
 
 [dependencies.uuid]
 version = "0.4"
