@@ -13,6 +13,7 @@ use cryptonightlite;
 use concurrent_hashmap::*;
 use reqwest;
 use daemon_client::DaemonClient;
+use app::App;
 
 #[derive(Clone)]
 pub enum HashType {
@@ -157,18 +158,21 @@ pub struct JobProvider {
   // TODO eventually everything here should be private
   pub template: RwLock<BlockTemplate>,
   nonce: AtomicUsize,
-  daemon: Arc<DaemonClient>,
-  pool_wallet: String,
+  app: Arc<App>,
   hash_type: HashType,
 }
 
 impl JobProvider {
-  pub fn new(daemon: Arc<DaemonClient>, pool_wallet: String, hash_type: HashType) -> JobProvider {
+  pub fn new(app: Arc<App>) -> JobProvider {
+    let hash_type = match app.config.hash_type.to_lowercase().as_ref() {
+      "cryptonight" => HashType::Cryptonight,
+      "cryptonightlite" => HashType::CryptonightLite,
+      _ => panic!("Invalid hash type in config.toml"),
+    };
     JobProvider {
       template: RwLock::new(Default::default()),
       nonce: AtomicUsize::new(0),
-      daemon,
-      pool_wallet,
+      app,
       hash_type,
     }
   }
@@ -206,7 +210,7 @@ impl JobProvider {
   }
 
   pub fn refresh(&self) {
-    let template = self.daemon.get_block_template();
+    let template = self.app.daemon.get_block_template();
     match template {
       Ok(template) => {
         if let Some(result) = template.get("result") {

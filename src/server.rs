@@ -15,6 +15,7 @@ use blocktemplate::*;
 use daemon_client::*;
 use unlocker::Unlocker;
 use influx_db_client::{Client, Point, Points, Precision, Value as IxValue};
+use app::App;
 
 // TODO eventually this 'allow' will need to go away
 #[allow(dead_code)]
@@ -59,25 +60,20 @@ impl Metadata for Meta {}
 
 struct PoolServer {
   config: ServerConfig,
-  daemon: Arc<DaemonClient>,
+  app: Arc<App>,
   // TODO there will need to be expiry here
   miner_connections: ConcHashMap<String, Miner>,
-  job_provider: Arc<JobProvider>,
-  db: Arc<Client>,
-  address_pattern: Regex,
+  job_provider: Arc<JobProvider>
 }
 
 impl PoolServer {
-  fn new(server_config: &ServerConfig, daemon: Arc<DaemonClient>, db: Arc<Client>,
-         job_provider: Arc<JobProvider>)
+  fn new(app: Arc<App>, server_config: &ServerConfig, job_provider: Arc<JobProvider>)
          -> PoolServer {
     PoolServer {
       config: server_config.clone(),
-      daemon,
+      app,
       miner_connections: Default::default(),
       job_provider,
-      db,
-      address_pattern: Regex::new("[a-zA-Z0-9]+").unwrap(),
     }
   }
 
@@ -110,7 +106,7 @@ impl PoolServer {
     if let Some(&Value::String(ref login)) = params.get("login") {
       let id = &Uuid::new_v4().to_string();
       // TODO add some validation on the login address
-      if !self.address_pattern.is_match(login) {
+      if !self.app.address_pattern.is_match(login) {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
       let miner = Miner {
@@ -137,7 +133,7 @@ impl PoolServer {
 
   fn submit(&self, params: Map<String, Value>) -> Result<Value> {
     if let Some(miner) = self.getminer(&params) {
-      if !self.address_pattern.is_match(&miner.login) {
+      if !self.app.address_pattern.is_match(&miner.login) {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {
@@ -151,7 +147,7 @@ impl PoolServer {
               JobResult::BlockFound(block) => {
                 // TODO move some of this over to a method on JobProvider, do something with the
                 // result
-                let _submission = self.daemon.submit_block(&block.blob);
+                let _submission = self.app.daemon.submit_block(&block.blob);
                 // TODO mining software seems reluctant to grab a job with the new template
                 self.job_provider.refresh();
                 let mut share_log = Point::new("valid_share");
@@ -163,14 +159,14 @@ impl PoolServer {
                 submission_log.add_field("status", IxValue::String("submitted".to_owned()));
                 let mut to_insert = Points::new(share_log);
                 to_insert.push(submission_log);
-                let _ = self.db.write_points(to_insert, Some(Precision::Seconds), None).unwrap();
+                let _ = self.app.db.write_points(to_insert, Some(Precision::Seconds), None).unwrap();
                 Ok(Value::String("Submission accepted".to_owned()))
               },
               JobResult::SharesAccepted => {
                 let mut share_log = Point::new("valid_share");
                 share_log.add_tag("address", IxValue::String(miner.login.to_owned()));
                 share_log.add_field("value", IxValue::Integer(job.difficulty as i64));
-                let _ = self.db.write_point(share_log, Some(Precision::Seconds), None).unwrap();
+                let _ = self.app.db.write_point(share_log, Some(Precision::Seconds), None).unwrap();
                 Ok(Value::String("Submission accepted".to_owned()))
               },
               JobResult::SharesRejected => Err(Error::invalid_params("Share rejected")),
@@ -184,30 +180,15 @@ impl PoolServer {
 }
 
 pub fn init(config: Config) {
-  let config_ref = Arc::new(config);
-  // TODO pull in the influx url from the config
-  let mut db_client = Client::default();
-  db_client.swith_database("cryptosmelt");
-  let influx_client = Arc::new(db_client);
-  // TODO clean up all of these superfluous _ref's
-  let inner_config_ref = config_ref.clone();
-  let daemon_client = Arc::new(DaemonClient::new(inner_config_ref.clone()));
-  let unlocker = Unlocker::new(config_ref.clone(), daemon_client.clone(), influx_client.clone());
-  let hash_type = match config_ref.hash_type.to_lowercase().as_ref() {
-    "cryptonight" => HashType::Cryptonight,
-    "cryptonightlite" => HashType::CryptonightLite,
-    _ => panic!("Invalid hash type in config.toml"),
-  };
-  let job_provider = Arc::new(JobProvider::new(
-    daemon_client.clone(),
-    inner_config_ref.pool_wallet.to_owned(),
-    hash_type,
-  ));
+  // TODO maybe shuffle this stuff into App
+  let app_ref = Arc::new(App::new(config));
+  let unlocker = Unlocker::new(app_ref.clone());
+  let job_provider = Arc::new(JobProvider::new(app_ref.clone()));
   // TODO make this just a for loop, no longer needs to be a map/collect
-  let servers: Vec<Arc<PoolServer>> = config_ref.ports.iter().map(|server_config| {
+  let servers: Vec<Arc<PoolServer>> = app_ref.config.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     let pool_server: Arc<PoolServer> = Arc::new(
-      PoolServer::new(server_config, daemon_client.clone(),influx_client.clone(), job_provider.clone())
+      PoolServer::new(app_ref.clone(), server_config, job_provider.clone())
     );
     let login_ref = pool_server.clone();
     io.add_method_with_meta("login", move |params, meta: Meta| {
@@ -254,7 +235,6 @@ pub fn init(config: Config) {
   }).collect();
 
   // TODO make sure we refresh the template after every successful submit
-  let thread_config_ref = inner_config_ref.clone();
   let tick = periodic_ms(2000);
   loop {
     job_provider.refresh();

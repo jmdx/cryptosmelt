@@ -3,6 +3,7 @@ use daemon_client::*;
 use influx_db_client::*;
 use serde_json::Value as SjValue;
 use config::*;
+use app::App;
 
 #[derive(Debug)]
 struct BlockShare {
@@ -12,17 +13,13 @@ struct BlockShare {
 }
 
 pub struct Unlocker {
-  config: Arc<Config>,
-  daemon: Arc<DaemonClient>,
-  db: Arc<Client>,
+  app: Arc<App>,
 }
 
 impl Unlocker {
-  pub fn new(config: Arc<Config>, daemon: Arc<DaemonClient>, db: Arc<Client>) -> Unlocker {
+  pub fn new(app: Arc<App>) -> Unlocker {
     Unlocker {
-      config,
-      daemon,
-      db,
+      app,
     }
   }
 
@@ -47,7 +44,7 @@ impl Unlocker {
   }
 
   pub fn process_blocks(&self) {
-    let blocks = self.db.query(
+    let blocks = self.app.db.query(
       "SELECT * FROM (\
             SELECT block, last(status) as last_status, height \
             FROM block_status \
@@ -60,7 +57,7 @@ impl Unlocker {
         &[SjValue::String(ref timestamp), SjValue::String(ref _group),
           SjValue::String(ref block_id), SjValue::Number(ref height),
           SjValue::String(ref status)] => {
-          let header_for_height = self.daemon.get_block_header(height.as_u64().unwrap());
+          let header_for_height = self.app.daemon.get_block_header(height.as_u64().unwrap());
           match header_for_height {
             Ok(header) => {
               if &header.hash != block_id {
@@ -68,7 +65,7 @@ impl Unlocker {
                 let mut orphaned = Point::new("block_status");
                 orphaned.add_tag("block", Value::String(block_id.to_owned()));
                 orphaned.add_field("status", Value::String("orphaned".to_owned()));
-                let _ = self.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
+                let _ = self.app.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
               }
               else if header.depth >= 60 {
                 self.assign_balances(block_id, header.reward);
@@ -77,7 +74,7 @@ impl Unlocker {
                 let mut unlocked = Point::new("block_progress");
                 unlocked.add_tag("block", Value::String(block_id.to_owned()));
                 unlocked.add_field("depth", Value::Integer(header.depth as i64));
-                let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+                let _ = self.app.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
               }
             },
             // TODO log the cases below, probably want to find out a nice way of doing logs
@@ -94,11 +91,11 @@ impl Unlocker {
   /// there is no transaction needed to move funds from the pool to itself.
   pub fn append_fees(&self, share_counts: &mut Vec<BlockShare>) -> u64 {
     let miner_shares: u64 = share_counts.iter().map(|share| share.shares).sum();
-    let dev_fee_percent: f64 = self.config.donations.iter().map(|donation| donation.percentage).sum();
-    let total_fee_ratio: f64 = (self.config.pool_fee + dev_fee_percent) / 100.0;
+    let dev_fee_percent: f64 = self.app.config.donations.iter().map(|donation| donation.percentage).sum();
+    let total_fee_ratio: f64 = (self.app.config.pool_fee + dev_fee_percent) / 100.0;
     let miner_share_portion: f64 = 1.0 - total_fee_ratio;
     let total_shares = (miner_shares as f64 * (1.0 / miner_share_portion)).round() as u64;
-    for &Donation { ref address, ref percentage } in &self.config.donations {
+    for &Donation { ref address, ref percentage } in &self.app.config.donations {
       share_counts.push(BlockShare {
         shares: (total_shares as f64 * (percentage / 100.0)).round() as u64,
         address: address.to_owned(),
@@ -110,7 +107,7 @@ impl Unlocker {
 
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
     // TODO process the payments
-    let blocks = self.db.query(
+    let blocks = self.app.db.query(
       "SELECT last(*) FROM block_status WHERE status = 'unlocked'",
       None,
     );
@@ -124,7 +121,7 @@ impl Unlocker {
         _ => {}
       }
     }
-    let shares= Unlocker::unwrap_query_results(self.db.query(
+    let shares= Unlocker::unwrap_query_results(self.app.db.query(
       &format!("SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address)", time_filter),
       None,
     ));
@@ -154,18 +151,18 @@ impl Unlocker {
     let mut unlocked = Point::new("block_status");
     unlocked.add_tag("block", Value::String(block_id.to_owned()));
     unlocked.add_field("status", Value::String("unlocked".to_owned()));
-    let _ = self.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
-    let _ = self.db.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
+    let _ = self.app.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+    let _ = self.app.db.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
   }
 
   pub fn process_payments(&self) {
     let payment_units_per_currency: f64 = 1e12;
-    let owed_payments = self.db.query(
+    let owed_payments = self.app.db.query(
       &format!("SELECT * FROM (\
             SELECT sum(change) as sum_change \
             FROM miner_balance \
             GROUP BY address\
-          ) WHERE sum_change > {}", self.config.min_payment * payment_units_per_currency),
+          ) WHERE sum_change > {}", self.app.config.min_payment * payment_units_per_currency),
       None,
     );
     let mut transfers = vec![];
@@ -174,35 +171,37 @@ impl Unlocker {
       match result.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref address),
           SjValue::Number(ref sum_change)] => {
-          let micro_denomination = self.config.payment_denomination * payment_units_per_currency;
-          let payment = sum_change.as_u64().unwrap() % (micro_denomination as u64);
-          transfers.push(Transfer {
-            address: address.to_owned(),
-            amount: payment,
-          });
+          if self.app.address_pattern.is_match(address) {
+            let micro_denomination = self.app.config.payment_denomination * payment_units_per_currency;
+            let payment = sum_change.as_u64().unwrap() % (micro_denomination as u64);
+            transfers.push(Transfer {
+              address: address.to_owned(),
+              amount: payment,
+            });
 
-          let mut balance_insert = Point::new("miner_balance");
-          balance_insert.add_tag("address", Value::String(address.to_owned()));
-          balance_insert.add_field("change", Value::Integer(-1 * payment as i64));
-          balance_changes.push(balance_insert);
+            let mut balance_insert = Point::new("miner_balance");
+            balance_insert.add_tag("address", Value::String(address.to_owned()));
+            balance_insert.add_field("change", Value::Integer(-1 * payment as i64));
+            balance_changes.push(balance_insert);
+          }
         },
         other => {
           println!("{:?}", other);
         }
       }
     }
-    match self.daemon.transfer(&transfers) {
+    match self.app.daemon.transfer(&transfers) {
       Ok(result) => {
         // TODO need to make sure transfer addresses or valid are valid or this call will fail
         for mut balance_change in balance_changes.point.iter_mut() {
           balance_change.add_tag("payment_transaction", Value::String(result.tx_hash_list[0].to_owned()));
         }
-        self.db.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
+        self.app.db.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
         for (fee, hash) in result.fee_list.iter().zip(result.tx_hash_list.iter()) {
           let mut payment_log = Point::new("pool_payment");
           payment_log.add_tag("transaction_hash", Value::String(hash.to_owned()));
           payment_log.add_field("fee", Value::Integer(*fee as i64));
-          self.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
+          self.app.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
         }
       },
       _ => println!("Failed to initiate transfer"),
@@ -212,7 +211,7 @@ impl Unlocker {
 
 #[test]
 fn test_fee_percentages() {
-  let fee_config = Arc::new(Config {
+  let fee_config = Config {
     hash_type: String::new(),
     influx_url: String::new(),
     daemon_url: String::new(),
@@ -220,14 +219,14 @@ fn test_fee_percentages() {
     payment_mixin: 0,
     min_payment: 0.0,
     payment_denomination: 0.0,
-    pool_wallet: String::new(),
+    pool_wallet: "pool".to_owned(),
     pool_fee: 10.0,
     donations: vec![Donation {
       address: "dev".to_owned(),
       percentage: 15.0,
     }],
     ports: Vec::new(),
-  });
+  };
   let mut example_shares = vec![BlockShare {
     shares: 150000,
     address: "miner1".to_owned(),
@@ -237,11 +236,7 @@ fn test_fee_percentages() {
     address: "miner2".to_owned(),
     is_fee: false,
   }];
-  let unlocker = Unlocker::new(
-    fee_config.clone(),
-    Arc::new(DaemonClient::new(fee_config.clone())),
-    Arc::new(Default::default()),
-  );
+  let unlocker = Unlocker::new(Arc::new(App::new(fee_config)));
   let total_shares = unlocker.append_fees(&mut example_shares);
   // Because the total fee percentage is 25% (an unrealistic but easy-to-reason-about number), 75%
   // of shares should go to the miners.

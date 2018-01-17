@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use toml;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Config {
   pub hash_type: String,
   pub influx_url: String,
