@@ -2,23 +2,17 @@ use jsonrpc_core::*;
 use jsonrpc_core::serde_json::{Map};
 use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
-use std::result::Result as StdResult;
+use std::sync::{Arc};
 use concurrent_hashmap::*;
 use uuid::*;
-use reqwest;
 use schedule_recv::periodic_ms;
 use std::thread;
 use config::*;
-use regex::Regex;
 use blocktemplate::*;
-use daemon_client::*;
 use unlocker::Unlocker;
-use influx_db_client::{Client, Point, Points, Precision, Value as IxValue};
+use influx_db_client::{Point, Points, Precision, Value as IxValue};
 use app::App;
 
-// TODO eventually this 'allow' will need to go away
-#[allow(dead_code)]
 struct Miner {
   miner_id: String,
   login: String,
@@ -184,8 +178,7 @@ pub fn init(config: Config) {
   let app_ref = Arc::new(App::new(config));
   let unlocker = Unlocker::new(app_ref.clone());
   let job_provider = Arc::new(JobProvider::new(app_ref.clone()));
-  // TODO make this just a for loop, no longer needs to be a map/collect
-  let servers: Vec<Arc<PoolServer>> = app_ref.config.ports.iter().map(|server_config| {
+  for server_config in app_ref.config.ports.iter() {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     let pool_server: Arc<PoolServer> = Arc::new(
       PoolServer::new(app_ref.clone(), server_config, job_provider.clone())
@@ -231,10 +224,8 @@ pub fn init(config: Config) {
       .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), server_config.port))
       .unwrap();
     thread::spawn(|| server.wait());
-    pool_server
-  }).collect();
+  }
 
-  // TODO make sure we refresh the template after every successful submit
   let tick = periodic_ms(2000);
   loop {
     job_provider.refresh();

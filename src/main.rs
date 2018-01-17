@@ -26,7 +26,6 @@ extern crate blake;
 extern crate jhffi;
 extern crate skeinffi;
 extern crate regex;
-#[macro_use]
 extern crate influx_db_client;
 
 
@@ -38,6 +37,7 @@ mod longkeccak;
 mod blocktemplate;
 mod daemon_client;
 mod unlocker;
+mod cryptonote_utils;
 
 fn main() {
   let config = config::read_config();
@@ -51,7 +51,6 @@ fn main() {
         message
       ))
     })
-    // TODO make the log configurable
     .level(config.log_level.parse().unwrap())
     .chain(std::io::stdout())
     .chain(fern::log_file(&config.log_file).unwrap())

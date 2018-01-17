@@ -1,4 +1,3 @@
-use std::sync::atomic::*;
 use std::sync::*;
 use jsonrpc_core::*;
 use reqwest;
@@ -50,13 +49,18 @@ impl DaemonClient {
   pub fn get_block_header(&self, height: u64) -> Result<BlockHeader, String> {
     match self.call_daemon(&self.config.daemon_url, "getblockheaderbyheight", json!({"height": height})) {
       Ok(value) => {
-        // TODO don't unwrap() so much here
-        let block_header = value.as_object().unwrap()
-          .get("result").unwrap()
-          .as_object().unwrap()
-          .get("block_header").unwrap()
+        let bad_header_response = "Bad header response from daemon";
+        let block_header = value.as_object()
+          .ok_or(bad_header_response.to_owned())?
+          .get("result")
+          .ok_or(bad_header_response.to_owned())?
+          .as_object()
+          .ok_or(bad_header_response.to_owned())?
+          .get("block_header")
+          .ok_or(bad_header_response.to_owned())?
           .clone();
-        Ok(serde_json::from_value(block_header).unwrap())
+        serde_json::from_value(block_header)
+          .map_err(|_| bad_header_response.to_owned())
       },
       Err(err) => Err(err),
     }

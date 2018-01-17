@@ -1,7 +1,7 @@
 # The values in this config are usable with https://github.com/moneroexamples/private-testnet
 
 hash_type="cryptonight"
-# If this is turned up to "debug", tokio in particular gives a lot of helpful debugging info.
+# If this is turned up to "debug", tokio in particular gives a lot of helpful debugging in
 log_level="info"
 log_file="cryptosmelt.log"
 

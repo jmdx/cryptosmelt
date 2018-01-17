@@ -54,9 +54,9 @@ impl Unlocker {
     );
     for result in Unlocker::unwrap_query_results(blocks) {
       match result.as_slice() {
-        &[SjValue::String(ref timestamp), SjValue::String(ref _group),
+        &[SjValue::String(ref _timestamp), SjValue::String(ref _group),
           SjValue::String(ref block_id), SjValue::Number(ref height),
-          SjValue::String(ref status)] => {
+          SjValue::String(ref _status)] => {
           let header_for_height = self.app.daemon.get_block_header(height.as_u64().unwrap());
           match header_for_height {
             Ok(header) => {
@@ -89,7 +89,7 @@ impl Unlocker {
   /// Appends donation fee shares, and returns the new total count of shares.  The pool fee is
   /// included in the returned total share count, but not appended to the share counts array, since
   /// there is no transaction needed to move funds from the pool to itself.
-  pub fn append_fees(&self, share_counts: &mut Vec<BlockShare>) -> u64 {
+  fn append_fees(&self, share_counts: &mut Vec<BlockShare>) -> u64 {
     let miner_shares: u64 = share_counts.iter().map(|share| share.shares).sum();
     let dev_fee_percent: f64 = self.app.config.donations.iter().map(|donation| donation.percentage).sum();
     let total_fee_ratio: f64 = (self.app.config.pool_fee + dev_fee_percent) / 100.0;
