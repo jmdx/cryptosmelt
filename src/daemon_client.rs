@@ -2,6 +2,7 @@ use std::sync::atomic::*;
 use std::sync::*;
 use jsonrpc_core::*;
 use reqwest;
+use std::result::Result;
 use config::Config;
 
 #[derive(Serialize)]
@@ -35,18 +36,18 @@ impl DaemonClient {
     }
   }
 
-  pub fn submit_block(&self, block: &str) -> reqwest::Result<Value> {
+  pub fn submit_block(&self, block: &str) -> Result<Value, String> {
     self.call_daemon(&self.config.daemon_url, "submitblock", json!([block]))
   }
 
-  pub fn get_block_template(&self) -> reqwest::Result<Value> {
+  pub fn get_block_template(&self) -> Result<Value, String> {
     self.call_daemon(&self.config.daemon_url, "getblocktemplate", json!({
       "wallet_address": self.config.pool_wallet,
       "reserve_size": 8
     }))
   }
 
-  pub fn get_block_header(&self, height: u64) -> reqwest::Result<BlockHeader> {
+  pub fn get_block_header(&self, height: u64) -> Result<BlockHeader, String> {
     match self.call_daemon(&self.config.daemon_url, "getblockheaderbyheight", json!({"height": height})) {
       Ok(value) => {
         // TODO don't unwrap() so much here
@@ -61,7 +62,7 @@ impl DaemonClient {
     }
   }
 
-  pub fn transfer(&self, transfers: &[Transfer]) -> reqwest::Result<TransferResult> {
+  pub fn transfer(&self, transfers: &[Transfer]) -> Result<TransferResult, String> {
     match self.call_daemon(&self.config.wallet_url, "transfer", json!({
       "destinations": transfers,
       "fee": 0, // The fee is specified, in the wallet API, but ignored
@@ -69,17 +70,19 @@ impl DaemonClient {
       "unlock_time": 0,
     })) {
       Ok(value) => {
-        // TODO don't unwrap() so much here
-        let transfer_result = value.as_object().unwrap()
-          .get("result").unwrap()
+        let transfer_result = value.as_object()
+          .ok_or("Bad transfer response from daemon".to_owned())?
+          .get("result")
+          .ok_or("Bad transfer response from daemon".to_owned())?
           .clone();
-        Ok(serde_json::from_value(transfer_result).unwrap())
+        serde_json::from_value(transfer_result)
+          .map_err(|_| "Bad transfer response from daemon".to_owned())
       },
       Err(err) => Err(err),
     }
   }
 
-  fn call_daemon(&self, url: &str, method: &str, params: Value) -> reqwest::Result<Value> {
+  fn call_daemon(&self, url: &str, method: &str, params: Value) -> Result<Value, String> {
     let map = json!({
       "jsonrpc": Value::String("2.0".to_owned()),
       "id": Value::String("0".to_owned()),
@@ -89,7 +92,19 @@ impl DaemonClient {
     let client = reqwest::Client::new();
     let mut res = client.post(url)
       .json(&map)
-      .send()?;
-    res.json()
+      .send().map_err(|err| format!("Bad response from RPC server: {:?}", err))?;
+    let json = res.json().map_err(|_| "Invalid JSON from RPC server".to_owned());
+    match json {
+      Ok(Value::Object(map)) => {
+        if let Some(&Value::Object(ref err_object)) = map.get("error") {
+          return Err(format!("Daemon produced error '{}', during {} on {}", match err_object.get("message") {
+            Some(&Value::String(ref err_message)) => err_message.to_owned(),
+            other => format!("{:?}", other)
+          }, method, url));
+        }
+        Ok(Value::Object(map))
+      }
+      other => other,
+    }
   }
 }

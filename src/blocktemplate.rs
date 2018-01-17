@@ -223,7 +223,7 @@ impl JobProvider {
           }
         }
       },
-      Err(message) => warn!("Failed to get new block template: {}", message)
+      Err(message) => warn!("Failed to get new block template: {:?}", message)
     }
   }
 }
