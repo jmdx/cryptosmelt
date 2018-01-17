@@ -6,6 +6,10 @@
 extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
+extern crate fern;
+extern crate chrono;
+#[macro_use]
+extern crate log;
 extern crate toml;
 extern crate jsonrpc_core;
 extern crate jsonrpc_tcp_server;
@@ -37,5 +41,20 @@ mod unlocker;
 
 fn main() {
   let config = config::read_config();
+  fern::Dispatch::new()
+    .format(|out, message, record| {
+      out.finish(format_args!(
+        "{}[{}][{}] {}",
+        chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
+        record.target(),
+        record.level(),
+        message
+      ))
+    })
+    // TODO make the log configurable
+    .level(config.log_level.parse().unwrap())
+    .chain(std::io::stdout())
+    .chain(fern::log_file(&config.log_file).unwrap())
+    .apply().unwrap();
   server::init(config);
 }

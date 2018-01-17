@@ -90,7 +90,6 @@ impl DaemonClient {
     let mut res = client.post(url)
       .json(&map)
       .send()?;
-    println!("{:?}", res);
     res.json()
   }
 }

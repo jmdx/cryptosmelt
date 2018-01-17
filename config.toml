@@ -1,9 +1,14 @@
 # The values in this config are usable with https://github.com/moneroexamples/private-testnet
 
 hash_type="cryptonight"
+# If this is turned up to "debug", tokio in particular gives a lot of helpful debugging info.
+log_level="info"
+log_file="cryptosmelt.log"
+
 influx_url="http://localhost:8086"
 daemon_url="http://localhost:38081/json_rpc"
 wallet_url="http://localhost:38082/json_rpc"
+
 payment_mixin=2
 min_payment=0.1
 payment_denomination=0.01

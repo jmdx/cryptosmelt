@@ -186,7 +186,7 @@ impl Unlocker {
           }
         },
         other => {
-          println!("{:?}", other);
+          warn!("Received invalid result from miner_balance series: {:?}", other);
         }
       }
     }
@@ -204,7 +204,7 @@ impl Unlocker {
           self.app.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
         }
       },
-      _ => println!("Failed to initiate transfer"),
+      Err(err) => error!("Failed to initiate transfer: {:?}", err),
     }
   }
 }
@@ -213,6 +213,8 @@ impl Unlocker {
 fn test_fee_percentages() {
   let fee_config = Config {
     hash_type: String::new(),
+    log_level: String::new(),
+    log_file: String::new(),
     influx_url: String::new(),
     daemon_url: String::new(),
     wallet_url: String::new(),

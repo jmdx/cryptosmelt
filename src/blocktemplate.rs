@@ -51,8 +51,6 @@ pub enum JobResult {
   SharesRejected,
 }
 
-// TODO eventually this 'allow' will need to go away
-#[allow(dead_code)]
 pub struct Job {
   pub id: String,
   pub hash_type: HashType,
@@ -106,7 +104,7 @@ impl Job {
         let block_id: Vec<String> = keccak(&input_with_length)[..32].to_vec().iter()
           .map(|b| format!("{:02x}", b))
           .collect();;
-        println!("Valid block candidate {}", block_id.join(""));
+        info!("Valid block candidate {}", block_id.join(""));
         let start_blob = &self.template_blob[..78];
         // TODO is there a good reason for "- 2"?
         let middle_blob = &self.template_blob[86..(self.reserved_offset as usize * 2 - 2)];
@@ -126,7 +124,7 @@ impl Job {
       }
       return JobResult::SharesAccepted;
     } else {
-      println!("Bad job submission");
+      warn!("Bad job submission");
     }
     JobResult::SharesRejected
   }
@@ -219,13 +217,13 @@ impl JobProvider {
           if let Ok(new_template) = parsed_template {
             let mut current_template = self.template.write().unwrap();
             if new_template.prev_hash != current_template.prev_hash {
-              println!("New block template of height {}.", new_template.height);
+              info!("New block template of height {}.", new_template.height);
               *current_template = new_template;
             }
           }
         }
       },
-      Err(message) => println!("Failed to get new block template: {}", message)
+      Err(message) => warn!("Failed to get new block template: {}", message)
     }
   }
 }
