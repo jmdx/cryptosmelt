@@ -209,42 +209,47 @@ impl Unlocker {
   }
 }
 
-#[test]
-fn test_fee_percentages() {
-  let fee_config = Config {
-    hash_type: String::new(),
-    log_level: String::new(),
-    log_file: String::new(),
-    influx_url: String::new(),
-    daemon_url: String::new(),
-    wallet_url: String::new(),
-    payment_mixin: 0,
-    min_payment: 0.0,
-    payment_denomination: 0.0,
-    pool_wallet: "pool".to_owned(),
-    pool_fee: 10.0,
-    donations: vec![Donation {
-      address: "dev".to_owned(),
-      percentage: 15.0,
-    }],
-    ports: Vec::new(),
-  };
-  let mut example_shares = vec![BlockShare {
-    shares: 150000,
-    address: "miner1".to_owned(),
-    is_fee: false,
-  }, BlockShare {
-    shares: 50000,
-    address: "miner2".to_owned(),
-    is_fee: false,
-  }];
-  let unlocker = Unlocker::new(Arc::new(App::new(fee_config)));
-  let total_shares = unlocker.append_fees(&mut example_shares);
-  // Because the total fee percentage is 25% (an unrealistic but easy-to-reason-about number), 75%
-  // of shares should go to the miners.
-  assert_eq!(total_shares * 3 / 4, 150000 + 50000);
-  // 90% of the shares should be allocated for transactions, the 10% pool fee in our scenario just
-  // sits in the pool wallet.
-  let distributed_shares: u64 = example_shares.iter().map(|share| share.shares).sum();
-  assert_eq!(total_shares * 9 / 10, distributed_shares);
+#[cfg(test)]
+mod tests {
+  use unlocker::*;
+
+  #[test]
+  fn test_fee_percentages() {
+    let fee_config = Config {
+      hash_type: String::new(),
+      log_level: String::new(),
+      log_file: String::new(),
+      influx_url: String::new(),
+      daemon_url: String::new(),
+      wallet_url: String::new(),
+      payment_mixin: 0,
+      min_payment: 0.0,
+      payment_denomination: 0.0,
+      pool_wallet: "pool".to_owned(),
+      pool_fee: 10.0,
+      donations: vec![Donation {
+        address: "dev".to_owned(),
+        percentage: 15.0,
+      }],
+      ports: Vec::new(),
+    };
+    let mut example_shares = vec![BlockShare {
+      shares: 150000,
+      address: "miner1".to_owned(),
+      is_fee: false,
+    }, BlockShare {
+      shares: 50000,
+      address: "miner2".to_owned(),
+      is_fee: false,
+    }];
+    let unlocker = Unlocker::new(Arc::new(App::new(fee_config)));
+    let total_shares = unlocker.append_fees(&mut example_shares);
+    // Because the total fee percentage is 25% (an unrealistic but easy-to-reason-about number), 75%
+    // of shares should go to the miners.
+    assert_eq!(total_shares * 3 / 4, 150000 + 50000);
+    // 90% of the shares should be allocated for transactions, the 10% pool fee in our scenario just
+    // sits in the pool wallet.
+    let distributed_shares: u64 = example_shares.iter().map(|share| share.shares).sum();
+    assert_eq!(total_shares * 9 / 10, distributed_shares);
+  }
 }

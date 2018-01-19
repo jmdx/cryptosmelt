@@ -221,12 +221,16 @@ impl BlockTemplate {
   }
 }
 
-#[test]
-fn test_parse_block_template() {
-  let test_block = BlockTemplate {
-    blockhashing_blob: "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e41bc4\
+#[cfg(test)]
+mod tests {
+  use blocktemplate::*;
+
+  #[test]
+  fn test_parse_block_template() {
+    let test_block = BlockTemplate {
+      blockhashing_blob: "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e41bc4\
     d70000000005c8e57bea6b5667f77529149756c249904fb346916f7580c18ea64ec793334e903".to_owned(),
-    blocktemplate_blob: "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e41bc\
+      blocktemplate_blob: "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e41bc\
     4d700000000001e1cf3701ffa5cf3705fbf3b1e40b02d2961caddbcd6294b41030ecf24fadc4229fc45c75df5def56d\
     c1841236db36380f8cce2840202bdba3913153bbbbd8c40a8b9409fe8944bb9964edd905506b558f8eadf027b858080\
     dd9da41702625f0a1c55924dedd94ae36929cfb99664176ff1d6417abfdc5bfb40daf20b9380a094a58d1d027151b66\
@@ -234,32 +238,33 @@ fn test_parse_block_template() {
     f0886e5caf027c8fd7e159277f1aa6c5a3796e49ca2b01bdcff031f0dd952991227c05512204eb76400cd8a06c30458\
     31783cd6fbdb9f50208000000000000000002cde625408d94764cf5244bff45ddb0f8d6d42d02b8c6afb99ae9dff33a\
     7bfcacae531ddf666352c45b25569c8d894ed8a327d9fb3c361ed0e7e0433190fe9fec".to_owned(),
-    difficulty: 0,
-    height: 0,
-    prev_hash: "".to_owned(),
-    reserved_offset: 285,
-    status: "OK".to_owned(),
-  };
-  assert_eq!(test_block.blockhashing_blob,
-             test_block.hashing_blob_with_nonce("0000000000000000").unwrap());
+      difficulty: 0,
+      height: 0,
+      prev_hash: "".to_owned(),
+      reserved_offset: 285,
+      status: "OK".to_owned(),
+    };
+    assert_eq!(test_block.blockhashing_blob,
+               test_block.hashing_blob_with_nonce("0000000000000000").unwrap());
 
-  // Kind of weird, but turns out it is possible to have blocks with just miner transactions.
-  let test_empty_block = BlockTemplate {
-    blockhashing_blob: "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e2085948e8bb148e862\
+    // Kind of weird, but turns out it is possible to have blocks with just miner transactions.
+    let test_empty_block = BlockTemplate {
+      blockhashing_blob: "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e2085948e8bb148e862\
     b8000000007f8e1bb9aaccac84169ccf9a9a33ac704960e252e05218d19d93a147a396922901".to_owned(),
-    blocktemplate_blob: "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e2085948e8bb148e8\
+      blocktemplate_blob: "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e2085948e8bb148e8\
     62b80000000001bfd53701ff83d53705e7aee92d0236238d7c671cd670c1e5d145aa38407aa7c4caf78c9c3a5086126\
     c3d1e6d8bd48090dfc04a0288d398bf66e39e28888192a76534060cf698d293d3ed36ba25b23952ee8681a58080dd9d\
     a41702907aeacf368448e675dff25d15f74a2e55ca0155d09a6ee3ff22e9e8231e03e580a094a58d1d028cd86671141\
     36db4b05fffa7359039243594749b3241cce28a782d2ace58cb1180c0caf384a302020a1e50d39fa6615e3b3a6ca883\
     bd37a22f3870907bbc1dbbe70c1a6d6b4c1e342b01926d835f688b901dea5d5e2c0df2251a216d769b6cbabaa6fa81f\
     3797aba88cc0208000000000000000000".to_owned(),
-    difficulty: 0,
-    height: 0,
-    prev_hash: "".to_owned(),
-    reserved_offset: 283,
-    status: "OK".to_owned(),
-  };
-  assert_eq!(test_empty_block.blockhashing_blob,
-             test_empty_block.hashing_blob_with_nonce("0000000000000000").unwrap());
+      difficulty: 0,
+      height: 0,
+      prev_hash: "".to_owned(),
+      reserved_offset: 283,
+      status: "OK".to_owned(),
+    };
+    assert_eq!(test_empty_block.blockhashing_blob,
+               test_empty_block.hashing_blob_with_nonce("0000000000000000").unwrap());
+  }
 }
