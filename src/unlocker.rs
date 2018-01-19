@@ -108,21 +108,27 @@ impl Unlocker {
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
     // TODO process the payments
     let blocks = self.app.db.query(
-      "SELECT last(*) FROM block_status WHERE status = 'unlocked'",
+      "SELECT * FROM block_status WHERE status = 'unlocked' ORDER BY time DESC LIMIT 1",
       None,
     );
+    debug!("Assigning balances...");
     let results = Unlocker::unwrap_query_results(blocks);
     let mut time_filter = "".to_owned();
     for result in results {
       match result.as_slice() {
         &[SjValue::String(ref timestamp), ..] => {
+          debug!("last block at {}", timestamp);
           time_filter = format!("WHERE time > '{}'", timestamp);
         },
         _ => {}
       }
     }
     let shares= Unlocker::unwrap_query_results(self.app.db.query(
-      &format!("SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address)", time_filter),
+      &format!(
+        "SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address) \
+         WHERE address <> ''",
+        time_filter
+      ),
       None,
     ));
     let mut share_counts: Vec<BlockShare> = shares.iter().map(|share| {
@@ -154,7 +160,6 @@ impl Unlocker {
     let _ = self.app.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
     let _ = self.app.db.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
   }
-
   pub fn process_payments(&self) {
     let payment_units_per_currency: f64 = 1e12;
     let owed_payments = self.app.db.query(
@@ -173,16 +178,20 @@ impl Unlocker {
           SjValue::Number(ref sum_change)] => {
           if self.app.address_pattern.is_match(address) {
             let micro_denomination = self.app.config.payment_denomination * payment_units_per_currency;
-            let payment = sum_change.as_u64().unwrap() % (micro_denomination as u64);
-            transfers.push(Transfer {
-              address: address.to_owned(),
-              amount: payment,
-            });
+            let mut payment = sum_change.as_u64().unwrap();
+            payment -= payment % (micro_denomination as u64);
+            info!("Sum change {}, payment {}, denomination {}", sum_change, payment, micro_denomination);
+            if payment > 0 {
+              transfers.push(Transfer {
+                address: address.to_owned(),
+                amount: payment,
+              });
 
-            let mut balance_insert = Point::new("miner_balance");
-            balance_insert.add_tag("address", Value::String(address.to_owned()));
-            balance_insert.add_field("change", Value::Integer(-1 * payment as i64));
-            balance_changes.push(balance_insert);
+              let mut balance_insert = Point::new("miner_balance");
+              balance_insert.add_tag("address", Value::String(address.to_owned()));
+              balance_insert.add_field("change", Value::Integer(-1 * payment as i64));
+              balance_changes.push(balance_insert);
+            }
           }
         },
         other => {
@@ -190,19 +199,21 @@ impl Unlocker {
         }
       }
     }
+    if transfers.len() == 0 {
+      return;
+    }
+    info!("Transfers: {:?}", &transfers);
     match self.app.daemon.transfer(&transfers) {
       Ok(result) => {
         // TODO need to make sure transfer addresses or valid are valid or this call will fail
         for mut balance_change in balance_changes.point.iter_mut() {
-          balance_change.add_tag("payment_transaction", Value::String(result.tx_hash_list[0].to_owned()));
+          balance_change.add_tag("payment_transaction", Value::String(result.tx_hash.to_owned()));
         }
         self.app.db.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
-        for (fee, hash) in result.fee_list.iter().zip(result.tx_hash_list.iter()) {
-          let mut payment_log = Point::new("pool_payment");
-          payment_log.add_tag("transaction_hash", Value::String(hash.to_owned()));
-          payment_log.add_field("fee", Value::Integer(*fee as i64));
-          self.app.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
-        }
+        let mut payment_log = Point::new("pool_payment");
+        payment_log.add_tag("transaction_hash", Value::String(result.tx_hash.to_owned()));
+        payment_log.add_field("fee", Value::Integer(result.fee as i64));
+        self.app.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
       },
       Err(err) => error!("Failed to initiate transfer: {:?}", err),
     }

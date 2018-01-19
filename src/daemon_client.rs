@@ -4,7 +4,7 @@ use reqwest;
 use std::result::Result;
 use config::Config;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct Transfer {
   pub amount: u64,
   pub address: String,
@@ -12,8 +12,8 @@ pub struct Transfer {
 
 #[derive(Deserialize)]
 pub struct TransferResult {
-  pub fee_list: Vec<u64>,
-  pub tx_hash_list: Vec<String>,
+  pub fee: u64,
+  pub tx_hash: String,
 }
 
 #[derive(Deserialize)]
@@ -69,18 +69,19 @@ impl DaemonClient {
   pub fn transfer(&self, transfers: &[Transfer]) -> Result<TransferResult, String> {
     match self.call_daemon(&self.config.wallet_url, "transfer", json!({
       "destinations": transfers,
-      "fee": 0, // The fee is specified, in the wallet API, but ignored
+      "fee": 0.01, // The fee is specified, in the wallet API, but ignored
       "mixin": self.config.payment_mixin,
       "unlock_time": 0,
     })) {
       Ok(value) => {
+        let error_msg = format!("Bad transfer response from daemon: {:?}", &value);
         let transfer_result = value.as_object()
-          .ok_or("Bad transfer response from daemon".to_owned())?
+          .ok_or(error_msg.to_owned())?
           .get("result")
-          .ok_or("Bad transfer response from daemon".to_owned())?
+          .ok_or(error_msg.to_owned())?
           .clone();
         serde_json::from_value(transfer_result)
-          .map_err(|_| "Bad transfer response from daemon".to_owned())
+          .map_err(|_| error_msg.to_owned())
       },
       Err(err) => Err(err),
     }
