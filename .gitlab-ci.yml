@@ -3,4 +3,4 @@ image: "rust:nightly"
 test:cargo:
   script:
   - rustc --version && cargo --version      # Print version info for debugging
-- cargo test --all --verbose
+  - cargo test --all --verbose
