@@ -78,7 +78,7 @@ impl Job {
         let start_blob = &self.template_blob[..78];
         // TODO is there a good reason for "- 2"?
         let middle_blob = &self.template_blob[86..(self.reserved_offset as usize * 2 - 2)];
-        let end_blob = &self.template_blob[(self.reserved_offset as usize * 2 + 16)..];
+        let end_blob = &self.template_blob[(self.reserved_offset as usize * 2 + 16 - 2)..];
         let block_candidate = format!(
           "{}{}{}{}{}",
           start_blob,
@@ -87,6 +87,11 @@ impl Job {
           self.extra_nonce,
           end_blob
         );
+        debug!("Block candidate for difficulty {}, achieved {}", self.network_difficulty,
+              achieved_difficulty);
+        debug!("Block template blob: {}", self.template_blob);
+        debug!("Formatted candidate: {} {} {} {} {}", start_blob, nonce, middle_blob,
+               self.extra_nonce, end_blob);
         return JobResult::BlockFound(SuccessfulBlock {
           id: block_id.join(""),
           blob: block_candidate,
@@ -123,7 +128,7 @@ impl JobProvider {
   }
 
   pub fn get_job(&self, difficulty: u64) -> Option<Job> {
-    // The network difficulty typically only exceeds the network difficulty shortly after firing
+    // The job difficulty typically only exceeds the network difficulty shortly after firing
     // up a testnet.  Aside from that, sending out jobs higher than the network difficulty would
     // be unlikely, but undesirable, since it would mean telling miners not to send in completed
     // blocks.
