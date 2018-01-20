@@ -1,4 +1,4 @@
-image: "rust:nightly"
+image: "rust:latest"
 
 test:cargo:
   script:
