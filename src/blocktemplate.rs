@@ -154,7 +154,8 @@ impl JobProvider {
     }
   }
 
-  pub fn refresh(&self) {
+  /// Refreshes the current template, returning true if there is a new one.
+  pub fn refresh(&self) -> bool {
     let template = self.app.daemon.get_block_template();
     match template {
       Ok(template) => {
@@ -166,12 +167,14 @@ impl JobProvider {
             if new_template.prev_hash != current_template.prev_hash {
               info!("New block template of height {}.", new_template.height);
               *current_template = new_template;
+              return true;
             }
           }
         }
       },
       Err(message) => warn!("Failed to get new block template: {:?}", message)
     }
+    false
   }
 }
 

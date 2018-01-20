@@ -13,6 +13,7 @@ extern crate log;
 extern crate toml;
 extern crate jsonrpc_core;
 extern crate jsonrpc_tcp_server;
+extern crate lru_time_cache;
 extern crate concurrent_hashmap;
 extern crate uuid;
 extern crate reqwest;

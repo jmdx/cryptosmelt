@@ -2,8 +2,10 @@ use jsonrpc_core::*;
 use jsonrpc_core::serde_json::{Map};
 use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
-use std::sync::{Arc};
-use concurrent_hashmap::*;
+use std::sync::{Arc, Mutex};
+use std::net::TcpStream;
+use std::io::Write;
+use lru_time_cache::*;
 use uuid::*;
 use schedule_recv::periodic_ms;
 use std::thread;
@@ -19,7 +21,7 @@ struct Miner {
   password: String,
   peer_addr: SocketAddr,
   difficulty: u64,
-  jobs: ConcHashMap<String, Job>,
+  jobs: Mutex<LruCache<String, Job>>,
 }
 
 impl Miner {
@@ -39,7 +41,7 @@ impl Miner {
         "blob": new_job.hashing_blob,
         "target": new_job.diff_hex,
       }));
-      self.jobs.insert(new_job.id.to_owned(), new_job);
+      self.jobs.lock().unwrap().insert(new_job.id.to_owned(), new_job);
       return response;
     }
     Err(Error::internal_error())
@@ -56,29 +58,30 @@ struct PoolServer {
   config: ServerConfig,
   app: Arc<App>,
   // TODO there will need to be expiry here
-  miner_connections: ConcHashMap<String, Miner>,
+  miner_connections: Mutex<LruCache<String, Arc<Miner>>>,
   job_provider: Arc<JobProvider>
 }
 
 impl PoolServer {
   fn new(app: Arc<App>, server_config: &ServerConfig, job_provider: Arc<JobProvider>)
          -> PoolServer {
+    // TODO make sure that miners work with this, probably support the keepalive call
+    let time_to_live = ::std::time::Duration::from_secs(300);
     PoolServer {
       config: server_config.clone(),
       app,
-      miner_connections: Default::default(),
+      // TODO make max miners configurable
+      miner_connections: Mutex::new(
+        LruCache::with_expiry_duration_and_capacity(time_to_live, 10000)
+      ),
       job_provider,
     }
   }
 
-  fn getminer(&self, params: &Map<String, Value>) -> Option<&Miner> {
+  fn getminer(&self, params: &Map<String, Value>) -> Option<Arc<Miner>> {
     if let Some(&Value::String(ref id)) = params.get("id") {
-      if let Some(miner) = self.miner_connections.find(id) {
-        let miner: &Miner = miner.get();
-        Some(miner)
-      } else {
-        None
-      }
+      self.miner_connections.lock().unwrap().get(id)
+        .map(|miner| miner.clone())
     } else {
       None
     }
@@ -90,6 +93,23 @@ impl PoolServer {
     }
     else {
       Err(Error::invalid_params("No miner with this ID"))
+    }
+  }
+
+  fn refresh_all_jobs(&self) {
+    for (_, miner) in self.miner_connections.lock().unwrap().iter() {
+      debug!("Attempting to refresh job for {}", miner.peer_addr);
+      let mut stream = TcpStream::connect(&miner.peer_addr);
+      match stream {
+        Ok(mut stream) => {
+          stream.set_write_timeout(Some(::std::time::Duration::from_millis(300)))
+            .map_err(|err| debug!("Failed to set write timeout: {:?}", err));
+          serde_json::to_string(&miner.get_job(&self.job_provider))
+            .map(|job| stream.write(job.as_bytes()))
+            .map_err(|err| debug!("Failed to write job to {}: {:?}", &miner.peer_addr, err));
+        }
+        Err(err) => debug!("Failed to connect to {}: {:?}", &miner.peer_addr, err)
+      }
     }
   }
 
@@ -111,14 +131,14 @@ impl PoolServer {
         peer_addr: meta.peer_addr.unwrap(),
         // TODO implement vardiff
         difficulty: self.config.difficulty,
-        jobs: Default::default(),
+        jobs: Mutex::new(LruCache::with_capacity(3)),
       };
       let response = json!({
         "id": id,
         "job": miner.get_job(&self.job_provider)?,
         "status": "OK",
       });
-      self.miner_connections.insert(id.to_owned(), miner);
+      self.miner_connections.lock().unwrap().insert(id.to_owned(), Arc::new(miner));
       Ok(response)
     } else {
       Err(Error::invalid_params("Login address required"))
@@ -131,9 +151,8 @@ impl PoolServer {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {
-        if let Some(job) = miner.jobs.find(job_id) {
+        if let Some(job) = miner.jobs.lock().unwrap().get(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
-            let job = job.get();
             return match job.submit(nonce) {
               // TODO maybe insert the nonce and template, that would be cool because then the
               // server becomes fully auditable by connected miners
@@ -178,7 +197,7 @@ pub fn init(config: Config) {
   let app_ref = Arc::new(App::new(config));
   let unlocker = Unlocker::new(app_ref.clone());
   let job_provider = Arc::new(JobProvider::new(app_ref.clone()));
-  for server_config in app_ref.config.ports.iter() {
+  let servers: Vec<Arc<PoolServer>> = app_ref.config.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
     let pool_server: Arc<PoolServer> = Arc::new(
       PoolServer::new(app_ref.clone(), server_config, job_provider.clone())
@@ -224,11 +243,16 @@ pub fn init(config: Config) {
       .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), server_config.port))
       .unwrap();
     thread::spawn(|| server.wait());
-  }
+    pool_server
+  }).collect();
 
   let tick = periodic_ms(2000);
   loop {
-    job_provider.refresh();
+    if job_provider.refresh() {
+      for server in servers.iter() {
+        server.refresh_all_jobs();
+      }
+    }
     unlocker.refresh();
     tick.recv().unwrap();
   }
