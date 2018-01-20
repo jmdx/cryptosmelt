@@ -52,9 +52,9 @@ fn main() {
         message
       ))
     })
-    .level(config.log_level.parse().unwrap())
+    .level(config.log_level.parse().expect("Invalid log level"))
     .chain(std::io::stdout())
-    .chain(fern::log_file(&config.log_file).unwrap())
+    .chain(fern::log_file(&config.log_file).expect("Invalid log file"))
     .apply().unwrap();
   server::init(config);
 }
