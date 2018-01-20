@@ -155,7 +155,7 @@ impl JobProvider {
   }
 
   /// Refreshes the current template, returning true if there is a new one.
-  pub fn refresh(&self) -> bool {
+  pub fn fetch_new_template(&self) -> bool {
     let template = self.app.daemon.get_block_template();
     match template {
       Ok(template) => {

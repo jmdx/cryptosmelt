@@ -1,5 +1,7 @@
 use jsonrpc_core::*;
 use jsonrpc_core::serde_json::{Map};
+use jsonrpc_core::futures::sync::mpsc::*;
+use jsonrpc_core::futures::*;
 use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -20,6 +22,7 @@ struct Miner {
   login: String,
   password: String,
   peer_addr: SocketAddr,
+  connection: Sender<String>,
   difficulty: u64,
   jobs: Mutex<LruCache<String, Job>>,
 }
@@ -50,7 +53,8 @@ impl Miner {
 
 #[derive(Default, Clone)]
 struct Meta {
-  peer_addr: Option<SocketAddr>
+  peer_addr: Option<SocketAddr>,
+  sender: Option<Sender<String>>,
 }
 impl Metadata for Meta {}
 
@@ -66,7 +70,7 @@ impl PoolServer {
   fn new(app: Arc<App>, server_config: &ServerConfig, job_provider: Arc<JobProvider>)
          -> PoolServer {
     // TODO make sure that miners work with this, probably support the keepalive call
-    let time_to_live = ::std::time::Duration::from_secs(300);
+    let time_to_live = ::std::time::Duration::from_secs(60 * 60 * 2);
     PoolServer {
       config: server_config.clone(),
       app,
@@ -97,18 +101,23 @@ impl PoolServer {
   }
 
   fn refresh_all_jobs(&self) {
+    debug!("Refreshing {} jobs.", self.miner_connections.lock().unwrap().len());
     for (_, miner) in self.miner_connections.lock().unwrap().iter() {
-      debug!("Attempting to refresh job for {}", miner.peer_addr);
-      let mut stream = TcpStream::connect(&miner.peer_addr);
-      match stream {
-        Ok(mut stream) => {
-          stream.set_write_timeout(Some(::std::time::Duration::from_millis(300)))
-            .map_err(|err| debug!("Failed to set write timeout: {:?}", err));
-          serde_json::to_string(&miner.get_job(&self.job_provider))
-            .map(|job| stream.write(job.as_bytes()))
-            .map_err(|err| debug!("Failed to write job to {}: {:?}", &miner.peer_addr, err));
+      let miner_job = miner.get_job(&self.job_provider);
+      if let Ok(miner_job) = miner_job {
+        let job_to_send = serde_json::to_string(&json!({
+          "jsonrpc": 2.0,
+          "method": "job",
+          "params": miner_job,
+        }));
+        let connection = miner.connection.clone();
+        if let &Ok(ref job) = &job_to_send {
+          connection.send(job.to_owned())
+            .poll();
         }
-        Err(err) => debug!("Failed to connect to {}: {:?}", &miner.peer_addr, err)
+        if let Err(err) = job_to_send {
+          debug!("Failed to write job to {}: {:?}", &miner.peer_addr, err);
+        }
       }
     }
   }
@@ -129,6 +138,7 @@ impl PoolServer {
         // TODO password isn't used, should probably go away
         password: "".to_owned(),
         peer_addr: meta.peer_addr.unwrap(),
+        connection: meta.sender.unwrap().clone(),
         // TODO implement vardiff
         difficulty: self.config.difficulty,
         jobs: Mutex::new(LruCache::with_capacity(3)),
@@ -162,7 +172,6 @@ impl PoolServer {
                 // result
                 let _submission = self.app.daemon.submit_block(&block.blob);
                 // TODO mining software seems reluctant to grab a job with the new template
-                self.job_provider.refresh();
                 let mut share_log = Point::new("valid_share");
                 share_log.add_tag("address", IxValue::String(miner.login.to_owned()));
                 share_log.add_field("value", IxValue::Integer(job.difficulty as i64));
@@ -237,7 +246,8 @@ pub fn init(config: Config) {
     let server = ServerBuilder::new(io)
       .session_meta_extractor(|context: &RequestContext| {
         Meta {
-          peer_addr: Some(context.peer_addr)
+          peer_addr: Some(context.peer_addr),
+          sender: Some(context.sender.clone()),
         }
       })
       .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), server_config.port))
@@ -248,7 +258,8 @@ pub fn init(config: Config) {
 
   let tick = periodic_ms(2000);
   loop {
-    if job_provider.refresh() {
+    if job_provider.fetch_new_template() {
+      debug!("Refreshing jobs on {} servers", servers.len());
       for server in servers.iter() {
         server.refresh_all_jobs();
       }
