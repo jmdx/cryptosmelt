@@ -1,6 +1,8 @@
 image: "rust:latest"
 
+before_script:
+  - rustup default nightly
+
 test:cargo:
-  script:
   - rustc --version && cargo --version      # Print version info for debugging
   - cargo test --all --verbose
