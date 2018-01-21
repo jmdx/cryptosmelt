@@ -7,6 +7,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::net::TcpStream;
 use std::io::Write;
+use std::time::*;
+use std::sync::atomic::*;
 use lru_time_cache::*;
 use uuid::*;
 use schedule_recv::periodic_ms;
@@ -23,8 +25,10 @@ struct Miner {
   password: String,
   peer_addr: SocketAddr,
   connection: Sender<String>,
-  difficulty: u64,
+  difficulty: AtomicUsize,
   jobs: Mutex<LruCache<String, Job>>,
+  session_shares: AtomicUsize,
+  session_start: SystemTime,
 }
 
 impl Miner {
@@ -36,7 +40,7 @@ impl Miner {
     // - the node pools use a global counter, but we might want the counter to be per-miner
     // - it might not even be necessary to use any counters
     //   (and just go with the first 8 bytes of the miner id)
-    if let Some(new_job) = job_provider.get_job(self.difficulty) {
+    if let Some(new_job) = job_provider.get_job(self.difficulty.load(Ordering::Relaxed) as u64) {
       // TODO maybe this method is superfluous now since it's mostly a passthrough
       // TODO probably cap the number of active jobs per miner
       let response = Ok(json!({
@@ -48,6 +52,45 @@ impl Miner {
       return response;
     }
     Err(Error::internal_error())
+  }
+
+  fn adjust_difficulty(&self, job_provider: &Arc<JobProvider>, new_shares: u64, config: &ServerConfig) {
+    let total_shares = self.session_shares.fetch_add(new_shares as usize, Ordering::SeqCst) as u64;
+    let secs_since_start = SystemTime::now().duration_since(self.session_start)
+      .expect("Session start is in the future, this shouldn't happen")
+      .as_secs();
+    let buffer_seconds = 60 * 5;
+    let buffer_shares = config.starting_difficulty * buffer_seconds;
+    let miner_hashrate = (total_shares + buffer_shares) / (secs_since_start + buffer_seconds);
+    let ideal_difficulty = miner_hashrate / config.target_time;
+    let actual_difficulty = self.difficulty.load(Ordering::Relaxed) as f64;
+    let difficulty_ratio = (ideal_difficulty as f64) / actual_difficulty;
+    if (difficulty_ratio - 1.0).abs() > 0.25 {
+      debug!("Adjusting miner to difficulty {}, address {}", ideal_difficulty, self.login);
+      // Each time we get a new block template, the miners need new jobs anyways - so we just leave
+      // the retargeting to that process.  Calling retarget_job here would be slightly tricky since
+      // we don't want to interrupt an in-progress RPC call from the miner.
+      self.difficulty.store(ideal_difficulty as usize, Ordering::Relaxed);
+    }
+  }
+
+  fn retarget_job(&self, job_provider: &Arc<JobProvider>) {
+    let miner_job = self.get_job(job_provider);
+    if let Ok(miner_job) = miner_job {
+      let job_to_send = serde_json::to_string(&json!({
+          "jsonrpc": 2.0,
+          "method": "job",
+          "params": miner_job,
+        }));
+      let connection = self.connection.clone();
+      if let &Ok(ref job) = &job_to_send {
+        connection.send(job.to_owned())
+          .poll();
+      }
+      if let Err(err) = job_to_send {
+        debug!("Failed to write job to {}: {:?}", &self.peer_addr, err);
+      }
+    }
   }
 }
 
@@ -103,22 +146,7 @@ impl PoolServer {
   fn refresh_all_jobs(&self) {
     debug!("Refreshing {} jobs.", self.miner_connections.lock().unwrap().len());
     for (_, miner) in self.miner_connections.lock().unwrap().iter() {
-      let miner_job = miner.get_job(&self.job_provider);
-      if let Ok(miner_job) = miner_job {
-        let job_to_send = serde_json::to_string(&json!({
-          "jsonrpc": 2.0,
-          "method": "job",
-          "params": miner_job,
-        }));
-        let connection = miner.connection.clone();
-        if let &Ok(ref job) = &job_to_send {
-          connection.send(job.to_owned())
-            .poll();
-        }
-        if let Err(err) = job_to_send {
-          debug!("Failed to write job to {}: {:?}", &miner.peer_addr, err);
-        }
-      }
+      miner.retarget_job(&self.job_provider);
     }
   }
 
@@ -140,8 +168,10 @@ impl PoolServer {
         peer_addr: meta.peer_addr.unwrap(),
         connection: meta.sender.unwrap().clone(),
         // TODO implement vardiff
-        difficulty: self.config.difficulty,
+        difficulty: AtomicUsize::new(self.config.starting_difficulty as usize),
         jobs: Mutex::new(LruCache::with_capacity(3)),
+        session_shares: AtomicUsize::new(0),
+        session_start: SystemTime::now(),
       };
       let response = json!({
         "id": id,
@@ -163,6 +193,8 @@ impl PoolServer {
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {
         if let Some(job) = miner.jobs.lock().unwrap().get(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
+            miner.adjust_difficulty(&self.job_provider, job.difficulty, &self.config);
+
             return match job.submit(nonce) {
               // TODO maybe insert the nonce and template, that would be cool because then the
               // server becomes fully auditable by connected miners
@@ -171,7 +203,6 @@ impl PoolServer {
                 // TODO move some of this over to a method on JobProvider, do something with the
                 // result
                 let _submission = self.app.daemon.submit_block(&block.blob);
-                // TODO mining software seems reluctant to grab a job with the new template
                 let mut share_log = Point::new("valid_share");
                 share_log.add_tag("address", IxValue::String(miner.login.to_owned()));
                 share_log.add_field("value", IxValue::Integer(job.difficulty as i64));

@@ -28,7 +28,8 @@ pub struct Donation {
 #[derive(Clone, Deserialize)]
 pub struct ServerConfig {
   pub port: u16,
-  pub difficulty: u64,
+  pub starting_difficulty: u64,
+  pub target_time: u64,
 }
 
 pub fn read_config() -> Config {

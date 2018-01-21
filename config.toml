@@ -21,12 +21,15 @@ percentage=1.0
 
 [[ports]]
 port = 11336
-difficulty = 50
+starting_difficulty = 50
+target_time = 10
 
 [[ports]]
 port = 11337
-difficulty = 500
+starting_difficulty = 500
+target_time = 10
 
 [[ports]]
 port = 11338
-difficulty = 5000
+starting_difficulty = 5000
+target_time = 10
