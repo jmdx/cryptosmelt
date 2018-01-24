@@ -62,7 +62,7 @@ impl Miner {
     let buffer_seconds = 60 * 5;
     let buffer_shares = config.starting_difficulty * buffer_seconds;
     let miner_hashrate = (total_shares + buffer_shares) / (secs_since_start + buffer_seconds);
-    let ideal_difficulty = miner_hashrate / config.target_time;
+    let ideal_difficulty = miner_hashrate * config.target_time;
     let actual_difficulty = self.difficulty.load(Ordering::Relaxed) as f64;
     let difficulty_ratio = (ideal_difficulty as f64) / actual_difficulty;
     if (difficulty_ratio - 1.0).abs() > 0.25 {
@@ -281,21 +281,24 @@ pub fn init(config: Config) {
           sender: Some(context.sender.clone()),
         }
       })
-      .start(&SocketAddr::new("127.0.0.1".parse().unwrap(), server_config.port))
+      .start(&SocketAddr::new("0.0.0.0".parse().unwrap(), server_config.port))
       .unwrap();
     thread::spawn(|| server.wait());
     pool_server
   }).collect();
 
   let tick = periodic_ms(2000);
+  let mut ticks_since_refresh = 0;
   loop {
-    if job_provider.fetch_new_template() {
+    if job_provider.fetch_new_template() || ticks_since_refresh > 10 {
       debug!("Refreshing jobs on {} servers", servers.len());
       for server in servers.iter() {
         server.refresh_all_jobs();
       }
+      ticks_since_refresh = 0;
     }
     unlocker.refresh();
     tick.recv().unwrap();
+    ticks_since_refresh += 1;
   }
 }
