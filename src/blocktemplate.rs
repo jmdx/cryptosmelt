@@ -10,11 +10,13 @@ use concurrent_hashmap::*;
 use app::App;
 use cryptonote_utils::*;
 
+#[derive(Debug)]
 pub struct SuccessfulBlock {
   pub id: String,
   pub blob: String,
 }
 
+#[derive(Debug)]
 pub enum JobResult {
   BlockFound(SuccessfulBlock),
   SharesAccepted,

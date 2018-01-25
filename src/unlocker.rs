@@ -44,7 +44,7 @@ impl Unlocker {
   }
 
   pub fn process_blocks(&self) {
-    let blocks = self.app.db.query(
+    let blocks = self.app.db.client.query(
       "SELECT * FROM (\
             SELECT block, last(status) as last_status, height \
             FROM block_status \
@@ -65,7 +65,7 @@ impl Unlocker {
                 let mut orphaned = Point::new("block_status");
                 orphaned.add_tag("block", Value::String(block_id.to_owned()));
                 orphaned.add_field("status", Value::String("orphaned".to_owned()));
-                let _ = self.app.db.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
+                let _ = self.app.db.client.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
               }
               else if header.depth >= 60 {
                 self.assign_balances(block_id, header.reward);
@@ -74,7 +74,7 @@ impl Unlocker {
                 let mut unlocked = Point::new("block_progress");
                 unlocked.add_tag("block", Value::String(block_id.to_owned()));
                 unlocked.add_field("depth", Value::Integer(header.depth as i64));
-                let _ = self.app.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+                let _ = self.app.db.client.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
               }
             },
             // TODO log the cases below, probably want to find out a nice way of doing logs
@@ -107,7 +107,7 @@ impl Unlocker {
 
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
     // TODO process the payments
-    let blocks = self.app.db.query(
+    let blocks = self.app.db.client.query(
       "SELECT * FROM block_status WHERE status = 'unlocked' ORDER BY time DESC LIMIT 1",
       None,
     );
@@ -123,7 +123,7 @@ impl Unlocker {
         _ => {}
       }
     }
-    let shares= Unlocker::unwrap_query_results(self.app.db.query(
+    let shares= Unlocker::unwrap_query_results(self.app.db.client.query(
       &format!(
         "SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address) \
          WHERE address <> ''",
@@ -157,12 +157,12 @@ impl Unlocker {
     let mut unlocked = Point::new("block_status");
     unlocked.add_tag("block", Value::String(block_id.to_owned()));
     unlocked.add_field("status", Value::String("unlocked".to_owned()));
-    let _ = self.app.db.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
-    let _ = self.app.db.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
+    let _ = self.app.db.client.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+    let _ = self.app.db.client.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
   }
   pub fn process_payments(&self) {
     let payment_units_per_currency: f64 = 1e12;
-    let owed_payments = self.app.db.query(
+    let owed_payments = self.app.db.client.query(
       &format!("SELECT * FROM (\
             SELECT sum(change) as sum_change \
             FROM miner_balance \
@@ -209,11 +209,11 @@ impl Unlocker {
         for mut balance_change in balance_changes.point.iter_mut() {
           balance_change.add_tag("payment_transaction", Value::String(result.tx_hash.to_owned()));
         }
-        self.app.db.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
+        self.app.db.client.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
         let mut payment_log = Point::new("pool_payment");
         payment_log.add_tag("transaction_hash", Value::String(result.tx_hash.to_owned()));
         payment_log.add_field("fee", Value::Integer(result.fee as i64));
-        self.app.db.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
+        self.app.db.client.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
       },
       Err(err) => error!("Failed to initiate transfer: {:?}", err),
     }

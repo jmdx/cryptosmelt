@@ -33,6 +33,8 @@ extern crate influx_db_client;
 mod config;
 mod server;
 mod app;
+mod db;
+mod miner;
 mod cryptonightlite;
 mod longkeccak;
 mod blocktemplate;
