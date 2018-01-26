@@ -40,10 +40,6 @@ pub struct Job {
 impl Job {
   pub fn check_submission(&self, nonce: &String) -> JobResult {
     if nonce.len() != 8 {
-      // We expect a hex representing a 32 bit integer.  We don't care so much about validating that
-      // it is purely hexadecimal chaaracters, though, since string_to_u8_array will just zero out
-      // anything non-hexadecimal.
-      // TODO actually, probably check that it's hex to be safe
       return JobResult::SharesRejected;
     }
     let previous_submission = self.submissions.insert(nonce.to_owned(), true);
@@ -51,9 +47,6 @@ impl Job {
       // TODO we'll probably want some auto banning functionality in place here
       return JobResult::SharesRejected;
     }
-    // TODO check if the block is expired, may want to do away with the template reference and just
-    // check against the current template, since anything of a lower height will be expired as long
-    // as we only keep one template per height
     let blob = &self.hashing_blob;
     let (a, _) = blob.split_at(78);
     let (_, b) = blob.split_at(86);
@@ -71,11 +64,8 @@ impl Job {
         // - The fast hashing function, keccak, is used instead of cryptonight.
         let mut input_with_length = to_varint(hash_input.len());
         input_with_length.extend(&hash_input);
-        // TODO use a helper function for this map/collect/join byte formatting
-        let block_id: Vec<String> = keccak(&input_with_length)[..32].to_vec().iter()
-          .map(|b| format!("{:02x}", b))
-          .collect();;
-        info!("Valid block candidate {}", block_id.join(""));
+        let block_id = bytes_to_hex(keccak(&input_with_length)[..32].to_vec());
+        info!("Valid block candidate {}", &block_id);
         let start_blob = &self.template_blob[..78];
         // TODO is there a good reason for "- 2"?
         let middle_blob = &self.template_blob[86..(self.reserved_offset as usize * 2 - 2)];
@@ -94,7 +84,7 @@ impl Job {
         debug!("Formatted candidate: {} {} {} {} {}", start_blob, nonce, middle_blob,
                self.extra_nonce, end_blob);
         return JobResult::BlockFound(SuccessfulBlock {
-          id: block_id.join(""),
+          id: block_id,
           blob: block_candidate,
         });
       }
@@ -138,10 +128,8 @@ impl JobProvider {
     let capped_difficulty = min(difficulty, template_data.difficulty);
     let target_hex = get_target_hex(capped_difficulty);
     let new_nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
-    // TODO maybe hashing_blob_with_nonce should take in a u64
     let extra_nonce = &format!("{:016x}", new_nonce);
     let new_blob = template_data.hashing_blob_with_nonce(extra_nonce);
-    // TODO do this more idiomatically
     match new_blob {
       Some(new_blob) => Some(Job {
         id: job_id.to_owned(),
@@ -218,14 +206,10 @@ impl BlockTemplate {
       let start = self.reserved_offset as usize * 2 + 16 + 64 * tx_index;
       tx_hashes.push(byte_string::string_to_u8_array(&self.blocktemplate_blob[start..(start + 64)]));
     }
-    let num_hashes: Vec<String> = to_varint(tx_hashes.len()).iter()
-      .map(|b| format!("{:02x}", b))
-      .collect();
-    let root_hash: Vec<String> = tree_hash(tx_hashes).iter()
-      .map(|b| format!("{:02x}", b))
-      .collect();
+    let num_hashes = bytes_to_hex(to_varint(tx_hashes.len()));
+    let root_hash = bytes_to_hex(tree_hash(tx_hashes));
     return Some(
-      format!("{}{}{}", &self.blockhashing_blob[..86], &root_hash.join(""), &num_hashes.join(""))
+      format!("{}{}{}", &self.blockhashing_blob[..86], &root_hash, &num_hashes)
     );
   }
 }

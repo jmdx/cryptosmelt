@@ -12,6 +12,7 @@ use blocktemplate::*;
 use unlocker::Unlocker;
 use app::App;
 use miner::Miner;
+use regex::Regex;
 
 #[derive(Default, Clone)]
 struct Meta {
@@ -24,7 +25,8 @@ struct PoolServer {
   config: ServerConfig,
   app: Arc<App>,
   miner_connections: Mutex<LruCache<String, Arc<Miner>>>,
-  job_provider: Arc<JobProvider>
+  job_provider: Arc<JobProvider>,
+  nonce_pattern: Regex,
 }
 
 impl PoolServer {
@@ -34,11 +36,11 @@ impl PoolServer {
     PoolServer {
       config: server_config.clone(),
       app,
-      // TODO make max miners configurable
       miner_connections: Mutex::new(
-        LruCache::with_expiry_duration_and_capacity(time_to_live, 10000)
+        LruCache::with_expiry_duration_and_capacity(time_to_live, server_config.max_connections.unwrap_or(10000))
       ),
       job_provider,
+      nonce_pattern: Regex::new("[0-9a-f]{8}").unwrap()
     }
   }
 
@@ -97,6 +99,9 @@ impl PoolServer {
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {
         if let Some(job) = miner.jobs.lock().unwrap().get(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
+            if !self.nonce_pattern.is_match(nonce) {
+              return Err(Error::invalid_params("nonce must be 8 hex digits"));
+            }
             miner.adjust_difficulty(job.difficulty, &self.config);
 
             return match job.check_submission(nonce) {
@@ -122,7 +127,6 @@ impl PoolServer {
 }
 
 pub fn init(config: Config) {
-  // TODO maybe shuffle this stuff into App
   let app_ref = Arc::new(App::new(config));
   let unlocker = Unlocker::new(app_ref.clone());
   let job_provider = Arc::new(JobProvider::new(app_ref.clone()));

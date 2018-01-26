@@ -30,6 +30,7 @@ pub struct ServerConfig {
   pub port: u16,
   pub starting_difficulty: u64,
   pub target_time: u64,
+  pub max_connections: Option<usize>,
 }
 
 pub fn read_config() -> Config {

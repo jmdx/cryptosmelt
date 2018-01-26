@@ -8,6 +8,13 @@ pub enum HashType {
   CryptonightLite,
 }
 
+pub fn bytes_to_hex(bytes: Vec<u8>) -> String {
+  let hexes: Vec<String> = bytes.iter()
+    .map(|b| format!("{:02x}", b))
+    .collect();
+  hexes.join("")
+}
+
 pub fn cn_hash(input: &Vec<u8>, hash_type: &HashType) -> String {
   let aes = aes::new(aes::AESSupport::HW);
   match hash_type {
@@ -120,6 +127,11 @@ mod tests {
   use cryptonote_utils::*;
 
   #[test]
+  fn test_bytes_to_hex () {
+    assert_eq!(bytes_to_hex(vec![0xde, 0xad, 0xbe, 0xef, 0x13, 0x37]), "deadbeef1337")
+  }
+
+  #[test]
   fn test_hash() {
     use mithril::byte_string;
     let input = byte_string::string_to_u8_array("");
@@ -171,10 +183,7 @@ mod tests {
       byte_string::string_to_u8_array("8c6bf2734897c193d39c343fce49a456f0ef84cf963593c5401a14621cc6ec1b"),
       byte_string::string_to_u8_array("ef01b53735ccb02bc96c5fd454105053e3b016174437ed83b25d2a79a88268f2"),
     ];
-    let test_tree_hash: Vec<String> = tree_hash(concat_hash_tests).iter()
-      .map(|b| format!("{:02x}", b))
-      .collect();
-    assert_eq!("2d0ad2566627b50cd45125e89e963433b212b368cd2d91662c44813ba9ec90c2",
-               test_tree_hash.join(""));
+    let test_tree_hash = bytes_to_hex(tree_hash(concat_hash_tests));
+    assert_eq!("2d0ad2566627b50cd45125e89e963433b212b368cd2d91662c44813ba9ec90c2", test_tree_hash);
   }
 }
