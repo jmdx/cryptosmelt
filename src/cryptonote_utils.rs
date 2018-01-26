@@ -39,7 +39,14 @@ pub fn get_target_hex(difficulty: u64) -> String {
 }
 
 /// From CNS-3 section 3
-/// TODO document this, and really everything else, a bit better
+///
+/// A varint is just a way of expressing an integer of arbitrary size as a list of bytes.  It
+/// has its origins in the xz file format: https://tukaani.org/xz/xz-file-format.txt
+/// The idea is that, if we start reading an integer, and some other bytes come after, we need to
+/// know where the integer stops and the other bytes begin.  So instead of using all 8 bits in each
+/// byte to store the integer, we just use 7 bits, and keep 1 of the bits as a flag to indicate
+/// whether or not the integer has ended.  Since 2^7 == 128, this is much like formatting an integer
+/// as base-128, aside from the flagging bit in each byte.
 #[allow(unused)] // We don't have any use for parsing varints right now, but might as well keep it
 pub fn from_varint(source: &[u8]) -> (usize, usize) {
   if source[0] < 128 {
@@ -71,10 +78,12 @@ pub fn to_varint(number: usize) -> Vec<u8> {
 }
 
 
-
+/// Returns the greatest power of 2 less than the given count.
 fn tree_hash_cnt(count: usize) -> usize {
   let mut i = 1;
   while i * 2 < count {
+    // There are fancier ways of doing this, but the original C implementation ran into trouble with
+    // that: https://monero.stackexchange.com/q/6426
     i *= 2;
   }
   return i;
@@ -86,7 +95,11 @@ fn concat_and_hash(in1: &[u8], in2: &[u8]) -> Vec<u8> {
   return keccak(&concatted_inputs[..])[..32].to_vec();
 }
 
-// https://lab.getmonero.org/pubs/MRL-0002.pdf
+/// https://lab.getmonero.org/pubs/MRL-0002.pdf
+///
+/// Defined in the cryptonote spec, this is a hash that combines several 32 byte hashes into one 32
+/// byte hash.  There is a tree structure to it, though as far as a pool is concerned, we're just
+/// hashing a bunch of transactions together in the way that the daemon wants it.
 pub fn tree_hash(hashes: Vec<Vec<u8>>) -> Vec<u8> {
   let count = hashes.len();
   if count == 1 {

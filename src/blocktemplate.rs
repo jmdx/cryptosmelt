@@ -10,6 +10,10 @@ use concurrent_hashmap::*;
 use app::App;
 use cryptonote_utils::*;
 
+// The number of hex digits in a cryptonote block header - the part before the transactions and
+// signatures.  This is always a fixed length, though the rest of a block can vary.
+const BLOCK_HEADER_LENGTH: usize = 86;
+
 #[derive(Debug)]
 pub struct SuccessfulBlock {
   pub id: String,
@@ -48,9 +52,16 @@ impl Job {
       return JobResult::SharesRejected;
     }
     let blob = &self.hashing_blob;
-    let (a, _) = blob.split_at(78);
-    let (_, b) = blob.split_at(86);
-    let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", a, nonce, b));
+    // Here for the most part we work with hex strings - there's probably a small performance
+    // penalty for doing so, but the vast majority of the time here is going to be spent computing
+    // the cryptonight hash anyways.
+
+    // The miner's provided nonce forms the last 8 bytes of the block header.  The original block
+    // hashing blob we sent to the miner has zeroes there, so we replace them with the nonce that
+    // the miner found.
+    let (pre_nonce, _) = blob.split_at(BLOCK_HEADER_LENGTH - 8);
+    let (_, post_nonce) = blob.split_at(BLOCK_HEADER_LENGTH);
+    let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", pre_nonce, nonce, post_nonce));
     let hash = cn_hash(&hash_input, &self.hash_type);
     let hash_val = byte_string::hex2_u64_le(&hash[48..]);
     let achieved_difficulty = u64::max_value() / hash_val;
@@ -66,10 +77,12 @@ impl Job {
         input_with_length.extend(&hash_input);
         let block_id = bytes_to_hex(keccak(&input_with_length)[..32].to_vec());
         info!("Valid block candidate {}", &block_id);
-        let start_blob = &self.template_blob[..78];
-        // TODO is there a good reason for "- 2"?
-        let middle_blob = &self.template_blob[86..(self.reserved_offset as usize * 2 - 2)];
-        let end_blob = &self.template_blob[(self.reserved_offset as usize * 2 + 16 - 2)..];
+        let start_blob = &self.template_blob[..(BLOCK_HEADER_LENGTH - 8)];
+        // For some reason the reserved offset is 1-indexed, so we have to subtract 1 byte (2 hexes)
+        let extra_nonce_start = self.reserved_offset as usize * 2 - 2;
+        let middle_blob = &self.template_blob[BLOCK_HEADER_LENGTH..extra_nonce_start];
+        let extra_nonce_end = extra_nonce_start + 16;
+        let end_blob = &self.template_blob[(extra_nonce_end)..];
         let block_candidate = format!(
           "{}{}{}{}{}",
           start_blob,
@@ -127,6 +140,11 @@ impl JobProvider {
     let template_data = self.template.read().unwrap();
     let capped_difficulty = min(difficulty, template_data.difficulty);
     let target_hex = get_target_hex(capped_difficulty);
+
+    // The extra_nonce field allows us to issue multiple jobs using the same block template, without
+    // any of those jobs being identical.  If they were identical, a miner could request the same
+    // job within multiple connections or difficulties, and submit duplicate "proof" of the same
+    // work.
     let new_nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
     let extra_nonce = &format!("{:016x}", new_nonce);
     let new_blob = template_data.hashing_blob_with_nonce(extra_nonce);
@@ -174,42 +192,39 @@ impl JobProvider {
 
 #[derive(Deserialize, Default)]
 pub struct BlockTemplate {
-  // TODO eventually most of this stuff can be private
-  pub blockhashing_blob: String,
-  pub blocktemplate_blob: String,
-  pub difficulty: u64,
-  pub height: u64,
-  pub prev_hash: String,
-  pub reserved_offset: u32,
-  pub status: String,
+  blockhashing_blob: String,
+  blocktemplate_blob: String,
+  difficulty: u64,
+  height: u64,
+  prev_hash: String,
+  reserved_offset: u32,
 }
 
 impl BlockTemplate {
   pub fn hashing_blob_with_nonce(&self, nonce: &str) -> Option<String> {
-    // TODO do away with the [..] usage, turns out there are non-panic alternatives
-    // TODO document this slicing stuff
     let miner_tx = format!(
       "{}{}",
-      &self.blocktemplate_blob[86..((self.reserved_offset * 2 - 2) as usize)],
+      &self.blocktemplate_blob[BLOCK_HEADER_LENGTH..((self.reserved_offset * 2 - 2) as usize)],
       nonce
     );
     let miner_tx_hash = keccak(&byte_string::string_to_u8_array(&miner_tx))[..32].to_vec();
-    let hex_digits_left = (self.blocktemplate_blob.len() - miner_tx.len()) - 86;
-    if (hex_digits_left - 2) % 64 != 0 {
-      return None;
-    }
+    let hex_digits_left = (self.blocktemplate_blob.len() - miner_tx.len()) - BLOCK_HEADER_LENGTH;
     let mut tx_hashes = Vec::new();
     tx_hashes.push(miner_tx_hash);
+    let first_transaction_position = self.reserved_offset as usize * 2 + 16;
     for tx_index in 0..(hex_digits_left / 64) {
-      // TODO make these numbers less magic, maybe just increment an index for readability
-      // TODO the "2" here assumes 1 byte for transaction count, that needs to be a varint as well
-      let start = self.reserved_offset as usize * 2 + 16 + 64 * tx_index;
+      let start = first_transaction_position + 64 * tx_index;
       tx_hashes.push(byte_string::string_to_u8_array(&self.blocktemplate_blob[start..(start + 64)]));
     }
+    // There is actually a single varint present after the transaction hashes - so even though it
+    // looks like we're ending the above loop at the end of the template, there are 1 or more bytes
+    // left.  It would break our parsing if the varint were 32 bytes, though that is unlikely,
+    // since that varint is a transaction count, and there would need to be 128^32 transactions to
+    // make the varint grow that large.
     let num_hashes = bytes_to_hex(to_varint(tx_hashes.len()));
     let root_hash = bytes_to_hex(tree_hash(tx_hashes));
     return Some(
-      format!("{}{}{}", &self.blockhashing_blob[..86], &root_hash, &num_hashes)
+      format!("{}{}{}", &self.blockhashing_blob[..BLOCK_HEADER_LENGTH], &root_hash, &num_hashes)
     );
   }
 }
@@ -235,7 +250,6 @@ mod tests {
       height: 0,
       prev_hash: "".to_owned(),
       reserved_offset: 285,
-      status: "OK".to_owned(),
     };
     assert_eq!(test_block.blockhashing_blob,
                test_block.hashing_blob_with_nonce("0000000000000000").unwrap());
@@ -255,7 +269,6 @@ mod tests {
       height: 0,
       prev_hash: "".to_owned(),
       reserved_offset: 283,
-      status: "OK".to_owned(),
     };
     assert_eq!(test_empty_block.blockhashing_blob,
                test_empty_block.hashing_blob_with_nonce("0000000000000000").unwrap());

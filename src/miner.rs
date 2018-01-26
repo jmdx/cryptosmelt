@@ -63,7 +63,7 @@ impl Miner {
     let secs_since_start = SystemTime::now().duration_since(self.session_start)
       .expect("Session start is in the future, this shouldn't happen")
       .as_secs();
-    let buffer_seconds = 60 * 5;
+    let buffer_seconds = 60 * 15;
     let buffer_shares = config.starting_difficulty * buffer_seconds;
     let miner_hashrate = (total_shares + buffer_shares) / (secs_since_start + buffer_seconds);
     let ideal_difficulty = miner_hashrate * config.target_time;
