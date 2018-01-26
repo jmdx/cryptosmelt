@@ -72,8 +72,9 @@ impl Miner {
         }));
       let connection = self.connection.clone();
       if let &Ok(ref job) = &job_to_send {
-        connection.send(job.to_owned())
-          .poll();
+        if let Err(err) = connection.send(job.to_owned()).poll() {
+          warn!("Error polling sent job: {:?}", err)
+        }
       }
       if let Err(err) = job_to_send {
         debug!("Failed to write job to {}: {:?}", &self.peer_addr, err);

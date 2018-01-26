@@ -39,7 +39,7 @@ pub struct Job {
 }
 
 impl Job {
-  pub fn submit(&self, nonce: &String) -> JobResult {
+  pub fn check_submission(&self, nonce: &String) -> JobResult {
     if nonce.len() != 8 {
       // We expect a hex representing a 32 bit integer.  We don't care so much about validating that
       // it is purely hexadecimal chaaracters, though, since string_to_u8_array will just zero out

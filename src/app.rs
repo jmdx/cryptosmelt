@@ -2,7 +2,6 @@ use std::sync::{Arc};
 use config::*;
 use db::*;
 use daemon_client::*;
-use influx_db_client::{Client};
 use regex::Regex;
 
 pub struct App {
@@ -14,7 +13,6 @@ pub struct App {
 
 impl App {
   pub fn new(config: Config) -> App {
-    let client = Client::default();
     let config_ref = Arc::new(config.clone());
     let currency_prefix = config.pool_wallet.chars().next().unwrap();
     App {

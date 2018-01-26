@@ -33,6 +33,7 @@ pub fn get_target_hex(difficulty: u64) -> String {
 
 /// From CNS-3 section 3
 /// TODO document this, and really everything else, a bit better
+#[allow(unused)] // We don't have any use for parsing varints right now, but might as well keep it
 pub fn from_varint(source: &[u8]) -> (usize, usize) {
   if source[0] < 128 {
     return (source[0] as usize, 1);

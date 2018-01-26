@@ -1,16 +1,9 @@
 use std::sync::*;
 use daemon_client::*;
-use influx_db_client::*;
 use serde_json::Value as SjValue;
 use config::*;
+use db::*;
 use app::App;
-
-#[derive(Debug)]
-struct BlockShare {
-  shares: u64,
-  address: String,
-  is_fee: bool,
-}
 
 pub struct Unlocker {
   app: Arc<App>,
@@ -23,36 +16,20 @@ impl Unlocker {
     }
   }
 
-  fn unwrap_query_results(results: Result<Option<Vec<Node>>, Error>) -> Vec<Vec<SjValue>> {
-    match results {
-      Ok(Some(nodes)) => {
-        nodes.iter().flat_map(|node| {
-          node.series.iter().flat_map(|series| {
-            series.iter().flat_map(|some_series| some_series.values.clone())
-          })
-        }).collect()
-      }
-      // TODO handle this a bit more gracefully, really all of the panics and unwrap()'s here should
-      // be handled via Result<>
-      err => panic!("Database error {:?}", err),
-    }
-  }
-
   pub fn refresh(&self) {
     self.process_blocks();
     self.process_payments();
   }
 
   pub fn process_blocks(&self) {
-    let blocks = self.app.db.client.query(
+    let blocks = self.app.db.query(
       "SELECT * FROM (\
             SELECT block, last(status) as last_status, height \
             FROM block_status \
             GROUP BY block\
           ) WHERE last_status = 'submitted'",
-      None,
     );
-    for result in Unlocker::unwrap_query_results(blocks) {
+    for result in blocks {
       match result.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref _group),
           SjValue::String(ref block_id), SjValue::Number(ref height),
@@ -61,20 +38,13 @@ impl Unlocker {
           match header_for_height {
             Ok(header) => {
               if &header.hash != block_id {
-                // TODO maybe add a module to keep the code for writes in one place
-                let mut orphaned = Point::new("block_status");
-                orphaned.add_tag("block", Value::String(block_id.to_owned()));
-                orphaned.add_field("status", Value::String("orphaned".to_owned()));
-                let _ = self.app.db.client.write_point(orphaned, Some(Precision::Seconds), None).unwrap();
+                self.app.db.block_status(block_id, "orphaned");
               }
               else if header.depth >= 60 {
                 self.assign_balances(block_id, header.reward);
               }
               else {
-                let mut unlocked = Point::new("block_progress");
-                unlocked.add_tag("block", Value::String(block_id.to_owned()));
-                unlocked.add_field("depth", Value::Integer(header.depth as i64));
-                let _ = self.app.db.client.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
+                self.app.db.block_progress(block_id, header.depth);
               }
             },
             // TODO log the cases below, probably want to find out a nice way of doing logs
@@ -107,12 +77,10 @@ impl Unlocker {
 
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
     // TODO process the payments
-    let blocks = self.app.db.client.query(
+    let results = self.app.db.query(
       "SELECT * FROM block_status WHERE status = 'unlocked' ORDER BY time DESC LIMIT 1",
-      None,
     );
     debug!("Assigning balances...");
-    let results = Unlocker::unwrap_query_results(blocks);
     let mut time_filter = "".to_owned();
     for result in results {
       match result.as_slice() {
@@ -123,14 +91,13 @@ impl Unlocker {
         _ => {}
       }
     }
-    let shares= Unlocker::unwrap_query_results(self.app.db.client.query(
+    let shares = self.app.db.query(
       &format!(
         "SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address) \
          WHERE address <> ''",
         time_filter
       ),
-      None,
-    ));
+    );
     let mut share_counts: Vec<BlockShare> = shares.iter().map(|share| {
       match share.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref address),
@@ -145,34 +112,20 @@ impl Unlocker {
       }
     }).collect();
     let total_shares = self.append_fees(&mut share_counts);
-    let mut share_inserts = Points::create_new(vec![]);
-    for BlockShare { shares, address, is_fee } in share_counts {
-      let balance_change = (shares as u128 * reward as u128) / total_shares as u128;
-      let mut share_insert = Point::new("miner_balance");
-      share_insert.add_tag("address", Value::String(address.to_owned()));
-      share_insert.add_field("change", Value::Integer(balance_change as i64));
-      share_insert.add_field("is_fee", Value::Boolean(is_fee));
-      share_inserts.push(share_insert);
-    }
-    let mut unlocked = Point::new("block_status");
-    unlocked.add_tag("block", Value::String(block_id.to_owned()));
-    unlocked.add_field("status", Value::String("unlocked".to_owned()));
-    let _ = self.app.db.client.write_point(unlocked, Some(Precision::Seconds), None).unwrap();
-    let _ = self.app.db.client.write_points(share_inserts, Some(Precision::Seconds), None).unwrap();
+    self.app.db.distribute_balances(reward, block_id, share_counts, total_shares);
   }
+
   pub fn process_payments(&self) {
     let payment_units_per_currency: f64 = 1e12;
-    let owed_payments = self.app.db.client.query(
+    let owed_payments = self.app.db.query(
       &format!("SELECT * FROM (\
             SELECT sum(change) as sum_change \
             FROM miner_balance \
             GROUP BY address\
           ) WHERE sum_change > {}", self.app.config.min_payment * payment_units_per_currency),
-      None,
     );
     let mut transfers = vec![];
-    let mut balance_changes = Points::create_new(vec![]);
-    for result in Unlocker::unwrap_query_results(owed_payments) {
+    for result in owed_payments {
       match result.as_slice() {
         &[SjValue::String(ref _timestamp), SjValue::String(ref address),
           SjValue::Number(ref sum_change)] => {
@@ -186,11 +139,6 @@ impl Unlocker {
                 address: address.to_owned(),
                 amount: payment,
               });
-
-              let mut balance_insert = Point::new("miner_balance");
-              balance_insert.add_tag("address", Value::String(address.to_owned()));
-              balance_insert.add_field("change", Value::Integer(-1 * payment as i64));
-              balance_changes.push(balance_insert);
             }
           }
         },
@@ -203,19 +151,20 @@ impl Unlocker {
       return;
     }
     info!("Transfers: {:?}", &transfers);
-    match self.app.daemon.transfer(&transfers) {
-      Ok(result) => {
-        // TODO need to make sure transfer addresses or valid are valid or this call will fail
-        for mut balance_change in balance_changes.point.iter_mut() {
-          balance_change.add_tag("payment_transaction", Value::String(result.tx_hash.to_owned()));
-        }
-        self.app.db.client.write_points(balance_changes, Some(Precision::Seconds), None).unwrap();
-        let mut payment_log = Point::new("pool_payment");
-        payment_log.add_tag("transaction_hash", Value::String(result.tx_hash.to_owned()));
-        payment_log.add_field("fee", Value::Integer(result.fee as i64));
-        self.app.db.client.write_point(payment_log, Some(Precision::Seconds), None).unwrap();
-      },
-      Err(err) => error!("Failed to initiate transfer: {:?}", err),
+    if self.app.db.is_connected() {
+      // It's important to check that we have a connection before transferring, since not having
+      // a DB connection after a transfer is a dangerous case.  There is still the chance that we
+      // could lose connection during the transfer, but this is as close as we can get to an atomic
+      // transaction between our database and the daemon.
+      match self.app.daemon.transfer(&transfers) {
+        Ok(result) => {
+          self.app.db.log_transfers(&transfers, &result.tx_hash, result.fee);
+        },
+        Err(err) => error!("Failed to initiate transfer: {:?}", err),
+      }
+    }
+    else {
+      warn!("Miners have payable balances, but the connection was lost while computing them.")
     }
   }
 }

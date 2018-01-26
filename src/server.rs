@@ -109,12 +109,11 @@ impl PoolServer {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {
-        // TODO probably make a method on Miner
         if let Some(job) = miner.jobs.lock().unwrap().get(job_id) {
           if let Some(&Value::String(ref nonce)) = params.get("nonce") {
             miner.adjust_difficulty(job.difficulty, &self.config);
 
-            return match job.submit(nonce) {
+            return match job.check_submission(nonce) {
               JobResult::BlockFound(block) => {
                 match self.app.daemon.submit_block(&block.blob) {
                   Ok(_) => self.app.db.block_found(block, &miner, &job),
