@@ -4,10 +4,7 @@ use jsonrpc_core::futures::sync::mpsc::*;
 use jsonrpc_tcp_server::*;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::*;
-use std::sync::atomic::*;
 use lru_time_cache::*;
-use uuid::*;
 use schedule_recv::periodic_ms;
 use std::thread;
 use config::*;
@@ -75,28 +72,17 @@ impl PoolServer {
       return Err(Error::internal_error());
     }
     if let Some(&Value::String(ref login)) = params.get("login") {
-      let id = &Uuid::new_v4().to_string();
       if !self.app.address_pattern.is_match(login) {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
-      // TODO use a constructor here
-      let miner = Miner {
-        miner_id: id.to_owned(),
-        login: login.to_owned(),
-        password: "".to_owned(),
-        peer_addr: meta.peer_addr.unwrap(),
-        connection: meta.sender.unwrap().clone(),
-        difficulty: AtomicUsize::new(self.config.starting_difficulty as usize),
-        jobs: Mutex::new(LruCache::with_capacity(3)),
-        session_shares: AtomicUsize::new(0),
-        session_start: SystemTime::now(),
-      };
+      let miner = Miner::new(login, meta.peer_addr.unwrap(), meta.sender.unwrap().clone(),
+                             self.config.starting_difficulty as usize);
       let response = json!({
-        "id": id,
+        "id": &miner.id,
         "job": miner.get_job(&self.job_provider)?,
         "status": "OK",
       });
-      self.miner_connections.lock().unwrap().insert(id.to_owned(), Arc::new(miner));
+      self.miner_connections.lock().unwrap().insert(miner.id.to_owned(), Arc::new(miner));
       Ok(response)
     } else {
       Err(Error::invalid_params("Login address required"))

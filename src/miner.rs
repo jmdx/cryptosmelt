@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use config::*;
+use uuid::*;
 use jsonrpc_core::*;
 use jsonrpc_core::futures::sync::mpsc::*;
 use jsonrpc_core::futures::*;
@@ -10,7 +11,7 @@ use lru_time_cache::*;
 use blocktemplate::*;
 
 pub struct Miner {
-  pub miner_id: String,
+  pub id: String,
   pub login: String,
   pub password: String,
   pub peer_addr: SocketAddr,
@@ -22,6 +23,21 @@ pub struct Miner {
 }
 
 impl Miner {
+  pub fn new(login: &str, peer_addr: SocketAddr, connection: Sender<String>, difficulty: usize) -> Miner {
+    let id = &Uuid::new_v4().to_string();
+    Miner {
+      id: id.to_owned(),
+      login: login.to_owned(),
+      password: "".to_owned(),
+      peer_addr,
+      connection,
+      difficulty: AtomicUsize::new(difficulty),
+      jobs: Mutex::new(LruCache::with_capacity(3)),
+      session_shares: AtomicUsize::new(0),
+      session_start: SystemTime::now(),
+    }
+  }
+
   pub fn get_job(&self, job_provider: &Arc<JobProvider>) -> Result<Value> {
     // Notes on the block template:
     // - reserve_size (8) is the amount of bytes to reserve so the pool can throw in an extra nonce

@@ -47,11 +47,14 @@ impl Unlocker {
                 self.app.db.block_progress(block_id, header.depth);
               }
             },
-            // TODO log the cases below, probably want to find out a nice way of doing logs
-            _ => {}
+            Err(err) => {
+              warn!("Unexpected result from daemon: {:?}", err);
+            }
           }
         },
-        _ => {}
+        err => {
+          warn!("Unexpected block query result: {:?}", err);
+        }
       }
     }
   }
@@ -76,7 +79,6 @@ impl Unlocker {
   }
 
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
-    // TODO process the payments
     let results = self.app.db.query(
       "SELECT * FROM block_status WHERE status = 'unlocked' ORDER BY time DESC LIMIT 1",
     );

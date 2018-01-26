@@ -30,7 +30,6 @@ pub struct Job {
   pub difficulty: u64,
   pub diff_hex: String,
   pub hashing_blob: String,
-  // TODO consider just keeping an Arc to the original template, storing this stuff is redundant
   pub template_blob: String,
   pub extra_nonce: String,
   pub reserved_offset: u32,
