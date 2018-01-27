@@ -11,6 +11,7 @@ extern crate chrono;
 #[macro_use]
 extern crate log;
 extern crate toml;
+extern crate iron;
 extern crate jsonrpc_core;
 extern crate jsonrpc_tcp_server;
 extern crate lru_time_cache;
@@ -30,17 +31,21 @@ extern crate regex;
 extern crate influx_db_client;
 
 
-mod config;
-mod server;
+mod api;
 mod app;
-mod db;
-mod miner;
-mod cryptonightlite;
-mod longkeccak;
 mod blocktemplate;
-mod daemon_client;
-mod unlocker;
+mod config;
 mod cryptonote_utils;
+mod cryptonightlite;
+mod daemon_client;
+mod db;
+mod longkeccak;
+mod miner;
+mod stratum;
+mod unlocker;
+
+use std::sync::Arc;
+use app::App;
 
 fn main() {
   let config = config::read_config();
@@ -58,5 +63,7 @@ fn main() {
     .chain(std::io::stdout())
     .chain(fern::log_file(&config.log_file).expect("Invalid log file"))
     .apply().unwrap();
-  server::init(config);
+  let app_ref = Arc::new(App::new(config));
+  api::init(app_ref.clone());
+  stratum::init(app_ref);
 }

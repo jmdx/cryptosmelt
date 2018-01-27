@@ -21,7 +21,7 @@ struct Meta {
 }
 impl Metadata for Meta {}
 
-struct PoolServer {
+struct StratumServer {
   config: ServerConfig,
   app: Arc<App>,
   miner_connections: Mutex<LruCache<String, Arc<Miner>>>,
@@ -29,11 +29,11 @@ struct PoolServer {
   nonce_pattern: Regex,
 }
 
-impl PoolServer {
+impl StratumServer {
   fn new(app: Arc<App>, server_config: &ServerConfig, job_provider: Arc<JobProvider>)
-         -> PoolServer {
+         -> StratumServer {
     let time_to_live = ::std::time::Duration::from_secs(60 * 60 * 2);
-    PoolServer {
+    StratumServer {
       config: server_config.clone(),
       app,
       miner_connections: Mutex::new(
@@ -142,14 +142,13 @@ macro_rules! route_permissive {
   }
 }
 
-pub fn init(config: Config) {
-  let app_ref = Arc::new(App::new(config));
+pub fn init(app_ref: Arc<App>) {
   let unlocker = Unlocker::new(app_ref.clone());
   let job_provider = Arc::new(JobProvider::new(app_ref.clone()));
-  let servers: Vec<Arc<PoolServer>> = app_ref.config.ports.iter().map(|server_config| {
+  let servers: Vec<Arc<StratumServer>> = app_ref.config.ports.iter().map(|server_config| {
     let mut io = MetaIoHandler::with_compatibility(Compatibility::Both);
-    let pool_server: Arc<PoolServer> = Arc::new(
-      PoolServer::new(app_ref.clone(), server_config, job_provider.clone())
+    let pool_server: Arc<StratumServer> = Arc::new(
+      StratumServer::new(app_ref.clone(), server_config, job_provider.clone())
     );
     route_permissive!("login", login, pool_server, io);
     route_permissive!("getjob", getjob, pool_server, io);
