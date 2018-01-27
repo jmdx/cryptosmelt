@@ -1,18 +1,61 @@
 use app::App;
 use std::sync::Arc;
-use iron::prelude::*;
-use iron::status;
-use std::net::SocketAddr;
 use std::thread;
+use rocket;
+use rocket::*;
+use rocket::http::*;
+use rocket_contrib::Json;
+use serde_json::*;
+
+const INTERVAL_SECS: u32 = 5 * 60;
+
+#[get("/poolstats")]
+fn poolstats(app: State<Arc<App>>) -> Json<Value> {
+  let hashrates = app.db.query(
+    &format!(
+      "SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
+       GROUP BY time({}s) fill(none)",
+      INTERVAL_SECS,
+      INTERVAL_SECS,
+    )
+  );
+  Json(json!({
+    "hashrates": hashrates,
+  }))
+}
+
+#[get("/minerstats/<address>")]
+fn minerstats(app: State<Arc<App>>, address: &RawStr) -> Json<Value> {
+  let address = address.as_str();
+  if !app.address_pattern.is_match(address) {
+    let no_data: Vec<String> = Vec::new();
+    Json(json!({
+      "hashrates": no_data
+    }))
+  }
+  else {
+    let hashrates = app.db.query(
+      &format!(
+        "SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
+         AND address='{}'\
+         GROUP BY time({}s) fill(none)",
+        INTERVAL_SECS,
+        // The check against app.address_pattern verifies that the address is alphanumeric, so we
+        // don't have to worry about injection.
+        address,
+        INTERVAL_SECS,
+      )
+    );
+    Json(json!({
+      "hashrates": hashrates,
+    }))
+  }
+}
 
 pub fn init(app: Arc<App>) {
-  fn hello_world(_: &mut Request) -> IronResult<Response> {
-    Ok(Response::with((status::Ok, "Hello World!")))
-  }
-  let api_port = app.config.api_port;
-  thread::spawn(move ||
-    Iron::new(hello_world)
-      .http(SocketAddr::new("0.0.0.0".parse().unwrap(), api_port))
-      .unwrap()
-  );
+  thread::spawn(move || {
+    rocket::ignite()
+      .manage(app)
+      .mount("/", routes![poolstats, minerstats]).launch();
+  });
 }

@@ -1,6 +1,8 @@
 #![feature(i128_type)]
 #![feature(box_syntax)]
 #![feature(slice_patterns)]
+#![feature(plugin)]
+#![plugin(rocket_codegen)]
 
 #[macro_use]
 extern crate serde_derive;
@@ -11,7 +13,8 @@ extern crate chrono;
 #[macro_use]
 extern crate log;
 extern crate toml;
-extern crate iron;
+extern crate rocket;
+extern crate rocket_contrib;
 extern crate jsonrpc_core;
 extern crate jsonrpc_tcp_server;
 extern crate lru_time_cache;

@@ -7,7 +7,6 @@ pub struct Config {
   pub hash_type: String,
   pub log_level: String,
   pub log_file: String,
-  pub api_port: u16,
   pub influx_url: String,
   pub daemon_url: String,
   pub wallet_url: String,

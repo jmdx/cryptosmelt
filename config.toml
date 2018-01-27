@@ -5,8 +5,6 @@ hash_type="cryptonight"
 log_level="info"
 log_file="cryptosmelt.log"
 
-api_port=8080
-
 influx_url="http://localhost:8086"
 daemon_url="http://localhost:38081/json_rpc"
 wallet_url="http://localhost:38082/json_rpc"
