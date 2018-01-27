@@ -65,10 +65,13 @@ impl StratumServer {
       return Err(Error::internal_error());
     }
     if let Some(&Value::String(ref login)) = params.get("login") {
-      if !self.app.address_pattern.is_match(login) {
+      let mut login_parts = login.split(":");
+      let address = login_parts.next().unwrap();
+      let alias = login_parts.next().map(|a| a.to_owned());
+      if !self.app.address_pattern.is_match(address) {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
-      let miner = Miner::new(login, meta.peer_addr.unwrap(), meta.sender.unwrap().clone(),
+      let miner = Miner::new(address, alias, meta.peer_addr.unwrap(), meta.sender.unwrap().clone(),
                              self.config.starting_difficulty as usize);
       let response = json!({
         "id": &miner.id,
@@ -93,7 +96,7 @@ impl StratumServer {
 
   fn submit(&self, params: Map<String, Value>, _meta: Meta) -> Result<Value> {
     if let Some(miner) = self.getminer(&params) {
-      if !self.app.address_pattern.is_match(&miner.login) {
+      if !self.app.address_pattern.is_match(&miner.address) {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
       }
       if let Some(&Value::String(ref job_id)) = params.get("job_id") {

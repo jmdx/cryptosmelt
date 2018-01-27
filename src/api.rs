@@ -13,8 +13,10 @@ const INTERVAL_SECS: u32 = 5 * 60;
 fn poolstats(app: State<Arc<App>>) -> Json<Value> {
   let hashrates = app.db.query(
     &format!(
-      "SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
-       GROUP BY time({}s) fill(none)",
+      // The influx client we use doesn't seem to have support for the groupings influx returns,
+      // so the nested select is needed to conver the groups into a flat form.
+      "SELECT * FROM (SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
+       GROUP BY time({}s), alias fill(none))",
       INTERVAL_SECS,
       INTERVAL_SECS,
     )
@@ -36,9 +38,9 @@ fn minerstats(app: State<Arc<App>>, address: &RawStr) -> Json<Value> {
   else {
     let hashrates = app.db.query(
       &format!(
-        "SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
+        "SELECT * FROM (SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
          AND address='{}'\
-         GROUP BY time({}s) fill(none)",
+         GROUP BY time({}s), alias fill(none))",
         INTERVAL_SECS,
         // The check against app.address_pattern verifies that the address is alphanumeric, so we
         // don't have to worry about injection.

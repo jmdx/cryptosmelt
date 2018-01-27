@@ -12,7 +12,8 @@ use blocktemplate::*;
 
 pub struct Miner {
   pub id: String,
-  pub login: String,
+  pub address: String,
+  pub alias: Option<String>,
   pub password: String,
   pub peer_addr: SocketAddr,
   pub connection: Sender<String>,
@@ -23,11 +24,13 @@ pub struct Miner {
 }
 
 impl Miner {
-  pub fn new(login: &str, peer_addr: SocketAddr, connection: Sender<String>, difficulty: usize) -> Miner {
+  pub fn new(address: &str, alias: Option<String>, peer_addr: SocketAddr,
+             connection: Sender<String>, difficulty: usize) -> Miner {
     let id = &Uuid::new_v4().to_string();
     Miner {
       id: id.to_owned(),
-      login: login.to_owned(),
+      address: address.to_owned(),
+      alias,
       password: "".to_owned(),
       peer_addr,
       connection,
@@ -76,7 +79,7 @@ impl Miner {
     let actual_difficulty = self.difficulty.load(Ordering::Relaxed) as f64;
     let difficulty_ratio = (ideal_difficulty as f64) / actual_difficulty;
     if (difficulty_ratio - 1.0).abs() > 0.25 {
-      debug!("Adjusting miner to difficulty {}, address {}", ideal_difficulty, self.login);
+      debug!("Adjusting miner to difficulty {}, address {}", ideal_difficulty, self.address);
       // Each time we get a new block template, the miners need new jobs anyways - so we just leave
       // the retargeting to that process.  Calling retarget_job here would be slightly tricky since
       // we don't want to interrupt an in-progress RPC call from the miner.
