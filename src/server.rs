@@ -53,15 +53,6 @@ impl PoolServer {
     }
   }
 
-  fn getjob(&self, params: Map<String, Value>) -> Result<Value> {
-    if let Some(miner) = self.getminer(&params) {
-      miner.get_job(&self.job_provider)
-    }
-    else {
-      Err(Error::invalid_params("No miner with this ID"))
-    }
-  }
-
   fn refresh_all_jobs(&self) {
     debug!("Refreshing {} jobs.", self.miner_connections.lock().unwrap().len());
     for (_, miner) in self.miner_connections.lock().unwrap().iter() {
@@ -91,7 +82,16 @@ impl PoolServer {
     }
   }
 
-  fn submit(&self, params: Map<String, Value>) -> Result<Value> {
+  fn getjob(&self, params: Map<String, Value>, _meta: Meta) -> Result<Value> {
+    if let Some(miner) = self.getminer(&params) {
+      miner.get_job(&self.job_provider)
+    }
+    else {
+      Err(Error::invalid_params("No miner with this ID"))
+    }
+  }
+
+  fn submit(&self, params: Map<String, Value>, _meta: Meta) -> Result<Value> {
     if let Some(miner) = self.getminer(&params) {
       if !self.app.address_pattern.is_match(&miner.login) {
         return Err(Error::invalid_params("Miner ID must be alphanumeric"));
@@ -126,6 +126,22 @@ impl PoolServer {
   }
 }
 
+/// The jsonrpc_macros crate would provide some nice macros, but is strict about protocol versions.
+/// Some mining software doesn't send over the required protocol version field, but sends its
+/// parameters in a map.  So we need to route permissively using add_method_with_meta, and parse
+/// parameters as a map no matter what version the miner says it uses.
+macro_rules! route_permissive {
+  ( $route:expr, $handler:ident, $server:ident, $io:ident ) => {
+    let handled_ref = $server.clone();
+    $io.add_method_with_meta($route, move |params, meta: Meta| {
+      match params {
+        Params::Map(map) => handled_ref.$handler(map, meta),
+        _ => Err(Error::invalid_params("Expected a params map")),
+      }
+    });
+  }
+}
+
 pub fn init(config: Config) {
   let app_ref = Arc::new(App::new(config));
   let unlocker = Unlocker::new(app_ref.clone());
@@ -135,37 +151,9 @@ pub fn init(config: Config) {
     let pool_server: Arc<PoolServer> = Arc::new(
       PoolServer::new(app_ref.clone(), server_config, job_provider.clone())
     );
-    let login_ref = pool_server.clone();
-    io.add_method_with_meta("login", move |params, meta: Meta| {
-      // TODO repeating this match isn't pretty
-      match params {
-        Params::Map(map) => login_ref.login(map, meta),
-        _ => Err(Error::invalid_params("Expected a params map")),
-      }
-    });
-
-    let getjob_ref = pool_server.clone();
-    io.add_method("getjob", move |params: Params| {
-      // TODO repeating this match isn't pretty
-      match params {
-        Params::Map(map) => getjob_ref.getjob(map),
-        _ => Err(Error::invalid_params("Expected a params map")),
-      }
-    });
-
-    let submit_ref = pool_server.clone();
-    io.add_method("submit", move |params| {
-      // TODO repeating this match isn't pretty
-      match params {
-        Params::Map(map) => submit_ref.submit(map),
-        _ => Err(Error::invalid_params("Expected a params map")),
-      }
-    });
-
-    let _keepalived_ref = pool_server.clone();
-    io.add_method("keepalived", |_params| {
-      Ok(Value::String("hello".to_owned()))
-    });
+    route_permissive!("login", login, pool_server, io);
+    route_permissive!("getjob", getjob, pool_server, io);
+    route_permissive!("submit", submit, pool_server, io);
 
     let server = ServerBuilder::new(io)
       .session_meta_extractor(|context: &RequestContext| {
