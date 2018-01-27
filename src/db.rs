@@ -33,9 +33,11 @@ impl DbAccess {
   pub fn block_found(&self, block: SuccessfulBlock, miner: &Miner, job: &Job) {
     let mut share_log = Point::new("valid_share");
     share_log.add_tag("address", Value::String(miner.address.to_owned()));
-    if let &Some(ref alias) = &miner.alias {
-      share_log.add_tag("alias", Value::String(alias.to_owned()));
-    }
+    let alias = match &miner.alias {
+      &Some(ref a) => a.to_owned(),
+      &None => "anonymous".to_owned(),
+    };
+    share_log.add_tag("alias", Value::String(alias));
     share_log.add_field("value", Value::Integer(job.difficulty as i64));
     let mut submission_log = Point::new("block_status");
     submission_log.add_tag("block", Value::String(block.id.to_owned()));
@@ -51,9 +53,11 @@ impl DbAccess {
   pub fn shares_accepted(&self, miner: &Miner, job: &Job) {
     let mut share_log = Point::new("valid_share");
     share_log.add_tag("address", Value::String(miner.address.to_owned()));
-    if let &Some(ref alias) = &miner.alias {
-      share_log.add_tag("alias", Value::String(alias.to_owned()));
-    }
+    let alias = match &miner.alias {
+      &Some(ref a) => a.to_owned(),
+      &None => "anonymous".to_owned(),
+    };
+    share_log.add_tag("alias", Value::String(alias));
     share_log.add_field("value", Value::Integer(job.difficulty as i64));
     if let Err(err) = self.client.write_point(share_log, Some(Precision::Seconds), None) {
       warn!("Failed saving shares, error: {:?}", err);
