@@ -15,7 +15,9 @@ fn poolstats(app: State<Arc<App>>) -> Json<Value> {
     &format!(
       // The influx client we use doesn't seem to have support for the groupings influx returns,
       // so the nested select is needed to conver the groups into a flat form.
-      "SELECT * FROM (SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
+      // Also on some systems, influx seems to have a bug where it ignores sum(...), so we have to
+      // improvise with mean * count.
+      "SELECT * FROM (SELECT mean(value) * count(value) / {} FROM valid_share WHERE time > now() - 1d \
        GROUP BY time({}s), alias fill(none))",
       INTERVAL_SECS,
       INTERVAL_SECS,
@@ -38,7 +40,7 @@ fn minerstats(app: State<Arc<App>>, address: &RawStr) -> Json<Value> {
   else {
     let hashrates = app.db.query(
       &format!(
-        "SELECT * FROM (SELECT sum(value) / {} FROM valid_share WHERE time > now() - 1d \
+        "SELECT * FROM (SELECT mean(value) * count(value) / {} FROM valid_share WHERE time > now() - 1d \
          AND address='{}'\
          GROUP BY time({}s), alias fill(none))",
         INTERVAL_SECS,

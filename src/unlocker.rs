@@ -95,7 +95,9 @@ impl Unlocker {
     }
     let shares = self.app.db.query(
       &format!(
-        "SELECT address, sum FROM (SELECT sum(value) FROM valid_share {} GROUP BY address) \
+        // On some systems, influx seems to have a bug where it ignores sum(...), so we have to
+        // improvise with mean * count.
+        "SELECT address, sum FROM (SELECT mean(value) * count(value) FROM valid_share {} GROUP BY address) \
          WHERE address <> ''",
         time_filter
       ),
@@ -121,7 +123,7 @@ impl Unlocker {
     let payment_units_per_currency: f64 = 1e12;
     let owed_payments = self.app.db.query(
       &format!("SELECT * FROM (\
-            SELECT sum(change) as sum_change \
+            SELECT mean(change) * count(change) as sum_change \
             FROM miner_balance \
             GROUP BY address\
           ) WHERE sum_change > {}", self.app.config.min_payment * payment_units_per_currency),
