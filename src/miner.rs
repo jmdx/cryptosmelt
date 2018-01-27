@@ -63,8 +63,14 @@ impl Miner {
     let secs_since_start = SystemTime::now().duration_since(self.session_start)
       .expect("Session start is in the future, this shouldn't happen")
       .as_secs();
-    let buffer_seconds = 60 * 15;
-    let buffer_shares = config.starting_difficulty * buffer_seconds;
+    let buffer_seconds = 60 * 5;
+    // These 'buffer' shares are not actually given to the miner, but just used as a smoothing
+    // factor so that the miner's hashrate doesn't jump all over the place within the first few
+    // minutes.  The number of buffer shares is equal to the number of shares a miner would get if
+    // they connected to a stratum port, and mined at the exact hashrate that port is tuned for,
+    // over a period of 5 minutes.
+    let buffer_shares = (config.starting_difficulty * buffer_seconds) / config.target_time;
+    // We then factor in those buffer shares to get a smoothed-out estimate of the miner's hashrate.
     let miner_hashrate = (total_shares + buffer_shares) / (secs_since_start + buffer_seconds);
     let ideal_difficulty = miner_hashrate * config.target_time;
     let actual_difficulty = self.difficulty.load(Ordering::Relaxed) as f64;
