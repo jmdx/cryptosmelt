@@ -95,7 +95,7 @@ impl Miner {
       let connection = self.connection.clone();
       if let &Ok(ref job) = &job_to_send {
         if let Err(err) = connection.send(job.to_owned()).poll() {
-          warn!("Error polling sent job: {:?}", err)
+          info!("Non-JSONRPC response from miner after sending job, though this is normal: {:?}", err)
         }
       }
       if let Err(err) = job_to_send {
