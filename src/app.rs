@@ -17,7 +17,7 @@ impl App {
     let currency_prefix = config.pool_wallet.chars().next().unwrap();
     App {
       config,
-      db: DbAccess::new(config_ref.clone()),
+      db: DbAccess::new(),
       daemon: DaemonClient::new(config_ref.clone()),
       address_pattern: Regex::new(&(
         currency_prefix.to_string() + "[a-zA-Z0-9][123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{93}"

@@ -7,22 +7,9 @@ use rocket::http::*;
 use rocket_contrib::Json;
 use serde_json::*;
 
-const INTERVAL_SECS: u32 = 5 * 60;
-
 #[get("/poolstats")]
 fn poolstats(app: State<Arc<App>>) -> Json<Value> {
-  let hashrates = app.db.query(
-    &format!(
-      // The influx client we use doesn't seem to have support for the groupings influx returns,
-      // so the nested select is needed to conver the groups into a flat form.
-      // Also on some systems, influx seems to have a bug where it ignores sum(...), so we have to
-      // improvise with mean * count.
-      "SELECT * FROM (SELECT mean(value) * count(value) / {} FROM valid_share WHERE time > now() - 1d \
-       GROUP BY time({}s), alias fill(none))",
-      INTERVAL_SECS,
-      INTERVAL_SECS,
-    )
-  );
+  let hashrates = app.db.get_hashrates();
   Json(json!({
     "hashrates": hashrates,
   }))
@@ -38,20 +25,10 @@ fn minerstats(app: State<Arc<App>>, address: &RawStr) -> Json<Value> {
     }))
   }
   else {
-    let hashrates = app.db.query(
-      &format!(
-        "SELECT * FROM (SELECT mean(value) * count(value) / {} FROM valid_share WHERE time > now() - 1d \
-         AND address='{}'\
-         GROUP BY time({}s), alias fill(none))",
-        INTERVAL_SECS,
-        // The check against app.address_pattern verifies that the address is alphanumeric, so we
-        // don't have to worry about injection.
-        address,
-        INTERVAL_SECS,
-      )
-    );
+    let no_data: Vec<String> = Vec::new();
+    // TODO reimplement this in postgres
     Json(json!({
-      "hashrates": hashrates,
+      "hashrates": no_data,
     }))
   }
 }

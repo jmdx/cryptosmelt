@@ -1,9 +1,9 @@
 use std::sync::*;
 use daemon_client::*;
-use serde_json::Value as SjValue;
 use config::*;
 use db::*;
 use app::App;
+use models::*;
 
 pub struct Unlocker {
   app: Arc<App>,
@@ -22,38 +22,23 @@ impl Unlocker {
   }
 
   pub fn process_blocks(&self) {
-    let blocks = self.app.db.query(
-      "SELECT * FROM (\
-            SELECT block, last(status) as last_status, height \
-            FROM block_status \
-            GROUP BY block\
-          ) WHERE last_status = 'submitted'",
-    );
-    for result in blocks {
-      match result.as_slice() {
-        &[SjValue::String(ref _timestamp), SjValue::String(ref _group),
-          SjValue::String(ref block_id), SjValue::Number(ref height),
-          SjValue::String(ref _status)] => {
-          let header_for_height = self.app.daemon.get_block_header(height.as_u64().unwrap());
-          match header_for_height {
-            Ok(header) => {
-              if &header.hash != block_id {
-                self.app.db.block_status(block_id, "orphaned");
-              }
-              else if header.depth >= 60 {
-                self.assign_balances(block_id, header.reward);
-              }
-              else {
-                self.app.db.block_progress(block_id, header.depth);
-              }
-            },
-            Err(err) => {
-              warn!("Unexpected result from daemon: {:?}", err);
-            }
+    let blocks = self.app.db.pending_submitted_blocks();
+    for FoundBlock { block_id, height, .. } in blocks {
+      let header_for_height = self.app.daemon.get_block_header(height as u64);
+      match header_for_height {
+        Ok(header) => {
+          if header.hash != block_id {
+            self.app.db.block_status(&block_id, BlockStatus::Orphaned);
+          }
+          else if header.depth >= 60 {
+            self.assign_balances(&block_id, header.reward);
+          }
+          else {
+            self.app.db.block_progress(&block_id, header.depth);
           }
         },
-        err => {
-          warn!("Unexpected block query result: {:?}", err);
+        Err(err) => {
+          warn!("Unexpected result from daemon: {:?}", err);
         }
       }
     }
@@ -79,40 +64,12 @@ impl Unlocker {
   }
 
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
-    let results = self.app.db.query(
-      "SELECT * FROM block_status WHERE status = 'unlocked' ORDER BY time DESC LIMIT 1",
-    );
-    debug!("Assigning balances...");
-    let mut time_filter = "".to_owned();
-    for result in results {
-      match result.as_slice() {
-        &[SjValue::String(ref timestamp), ..] => {
-          debug!("last block at {}", timestamp);
-          time_filter = format!("WHERE time > '{}'", timestamp);
-        },
-        _ => {}
-      }
-    }
-    let shares = self.app.db.query(
-      &format!(
-        // On some systems, influx seems to have a bug where it ignores sum(...), so we have to
-        // improvise with mean * count.
-        "SELECT address, sum FROM (SELECT mean(value) * count(value) FROM valid_share {} GROUP BY address) \
-         WHERE address <> ''",
-        time_filter
-      ),
-    );
+    let shares = self.app.db.unpaid_shares();
     let mut share_counts: Vec<BlockShare> = shares.iter().map(|share| {
-      match share.as_slice() {
-        &[SjValue::String(ref _timestamp), SjValue::String(ref address),
-        SjValue::Number(ref shares)] => {
-          BlockShare {
-            shares: shares.as_u64().unwrap(),
-            address: address.to_owned(),
-            is_fee: false,
-          }
-        },
-        _ => panic!("Bad response from database while preparing share calculation")
+      BlockShare {
+        shares: share.shares as u64,
+        address: share.address.to_owned(),
+        is_fee: false,
       }
     }).collect();
     let total_shares = self.append_fees(&mut share_counts);
@@ -121,33 +78,22 @@ impl Unlocker {
 
   pub fn process_payments(&self) {
     let payment_units_per_currency: f64 = 1e12;
-    let owed_payments = self.app.db.query(
-      &format!("SELECT * FROM (\
-            SELECT mean(change) * count(change) as sum_change \
-            FROM miner_balance \
-            GROUP BY address\
-          ) WHERE sum_change > {}", self.app.config.min_payment * payment_units_per_currency),
-    );
+    let min_payment = (self.app.config.min_payment * payment_units_per_currency) as i64;
     let mut transfers = vec![];
-    for result in owed_payments {
-      match result.as_slice() {
-        &[SjValue::String(ref _timestamp), SjValue::String(ref address),
-          SjValue::Number(ref sum_change)] => {
-          if self.app.address_pattern.is_match(address) {
-            let micro_denomination = self.app.config.payment_denomination * payment_units_per_currency;
-            let mut payment = sum_change.as_u64().unwrap();
-            payment -= payment % (micro_denomination as u64);
-            info!("Sum change {}, payment {}, denomination {}", sum_change, payment, micro_denomination);
-            if payment > 0 {
-              transfers.push(Transfer {
-                address: address.to_owned(),
-                amount: payment,
-              });
-            }
-          }
-        },
-        other => {
-          warn!("Received invalid result from miner_balance series: {:?}", other);
+    let balance_totals = self.app.db.miner_balance_totals();
+    let pending_payments = balance_totals.iter()
+      .filter(|payment| payment.amount > min_payment);
+    for &MinerBalanceTotal { ref amount, ref address } in pending_payments {
+      if self.app.address_pattern.is_match(&address) {
+        let micro_denomination = self.app.config.payment_denomination * payment_units_per_currency;
+        let mut payment = *amount as u64;
+        payment -= payment % (micro_denomination as u64);
+        info!("Payment {}, denomination {}", payment, micro_denomination);
+        if payment > 0 {
+          transfers.push(Transfer {
+            address: address.to_owned(),
+            amount: payment,
+          });
         }
       }
     }
@@ -183,7 +129,6 @@ mod tests {
       hash_type: String::new(),
       log_level: String::new(),
       log_file: String::new(),
-      influx_url: String::new(),
       daemon_url: String::new(),
       wallet_url: String::new(),
       payment_mixin: 0,

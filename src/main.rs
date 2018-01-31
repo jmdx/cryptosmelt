@@ -31,7 +31,11 @@ extern crate blake;
 extern crate jhffi;
 extern crate skeinffi;
 extern crate regex;
-extern crate influx_db_client;
+#[macro_use]
+extern crate diesel;
+extern crate dotenv;
+extern crate r2d2;
+extern crate r2d2_diesel;
 
 
 mod api;
@@ -46,6 +50,8 @@ mod longkeccak;
 mod miner;
 mod stratum;
 mod unlocker;
+mod schema;
+mod models;
 
 use std::sync::Arc;
 use app::App;
