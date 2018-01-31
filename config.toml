@@ -5,9 +5,8 @@ hash_type="cryptonight"
 log_level="info"
 log_file="cryptosmelt.log"
 
-influx_url="http://localhost:8086"
-daemon_url="http://localhost:38081/json_rpc"
-wallet_url="http://localhost:38082/json_rpc"
+daemon_url="http://localhost:28081/json_rpc"
+wallet_url="http://localhost:28082/json_rpc"
 
 payment_mixin=2
 min_payment=0.1
