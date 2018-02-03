@@ -1,4 +1,4 @@
-use schema::*;
+use db::schema::*;
 use diesel::sql_types::*;
 use chrono::NaiveDateTime;
 

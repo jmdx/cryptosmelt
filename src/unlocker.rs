@@ -3,7 +3,7 @@ use daemon_client::*;
 use config::*;
 use db::*;
 use app::App;
-use models::*;
+use db::models::*;
 
 pub struct Unlocker {
   app: Arc<App>,

@@ -1,6 +1,6 @@
-use longkeccak::keccak;
+use crypto::longkeccak::keccak;
+use crypto::cryptonightlite;
 use mithril::cryptonight::*;
-use cryptonightlite;
 
 #[derive(Clone)]
 pub enum HashType {

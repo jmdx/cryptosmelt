@@ -5,10 +5,13 @@ use diesel::prelude::*;
 use dotenv::dotenv;
 use diesel;
 use std::env;
-use schema::*;
 use r2d2_diesel::ConnectionManager;
 use r2d2::Pool;
-use models::*;
+use db::schema::*;
+use db::models::*;
+
+mod schema;
+pub mod models;
 
 #[derive(Debug)]
 pub struct BlockShare {
@@ -18,7 +21,6 @@ pub struct BlockShare {
 }
 
 pub struct DbAccess {
-  // TODO organize all db stuff under its own module
   conn_pool: Pool<ConnectionManager<PgConnection>>,
 }
 
@@ -85,7 +87,7 @@ impl DbAccess {
   }
 
   pub fn block_status(&self, block_id: &String, new_status: BlockStatus) {
-    use schema::found_block::dsl;
+    use db::schema::found_block::dsl;
 
     if let Ok(conn) = self.conn_pool.get() {
       let status_code: i32 = new_status.into();
@@ -205,7 +207,7 @@ impl DbAccess {
   }
 
   pub fn pending_submitted_blocks(&self) -> Vec<FoundBlock> {
-    use schema::found_block::dsl;
+    use db::schema::found_block::dsl;
     if let Ok(conn) = self.conn_pool.get() {
       let submitted: i32 = BlockStatus::Submitted.into();
       let result = dsl::found_block.filter(dsl::status.eq(submitted))
@@ -224,7 +226,7 @@ impl DbAccess {
   }
 
   pub fn last_unlocked_block_time(&self) -> Option<::chrono::NaiveDateTime> {
-    use schema::found_block::dsl;
+    use db::schema::found_block::dsl;
     use diesel::dsl::min;
     if let Ok(conn) = self.conn_pool.get() {
       let submitted: i32 = BlockStatus::Submitted.into();
@@ -272,7 +274,7 @@ impl DbAccess {
   pub fn miner_balance_totals(&self) -> Vec<MinerBalanceTotal> {
     if let Ok(conn) = self.conn_pool.get() {
       let result = diesel::sql_query(
-        "SELECT sum(change) AS amount, address FROM miner_balance GROUP BY address"
+        "SELECT CAST(SUM(change) AS BIGINT) AS amount, address FROM miner_balance GROUP BY address"
       ).load(&*conn);
       match result {
         Ok(shares) => shares,

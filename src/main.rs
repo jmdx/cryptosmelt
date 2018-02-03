@@ -42,16 +42,12 @@ mod api;
 mod app;
 mod blocktemplate;
 mod config;
-mod cryptonote_utils;
-mod cryptonightlite;
+mod crypto;
 mod daemon_client;
 mod db;
-mod longkeccak;
 mod miner;
 mod stratum;
 mod unlocker;
-mod schema;
-mod models;
 
 use std::sync::Arc;
 use app::App;

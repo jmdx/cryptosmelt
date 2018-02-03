@@ -1,4 +1,5 @@
-use longkeccak::keccak;
+use crypto::longkeccak::keccak;
+use crypto::cryptonote_utils::*;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::result::Result as StdResult;
@@ -8,7 +9,6 @@ use jsonrpc_core::*;
 use mithril::byte_string;
 use concurrent_hashmap::*;
 use app::App;
-use cryptonote_utils::*;
 
 // The number of hex digits in a cryptonote block header - the part before the transactions and
 // signatures.  This is always a fixed length, though the rest of a block can vary.
