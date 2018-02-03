@@ -18,19 +18,10 @@ fn poolstats(app: State<Arc<App>>) -> Json<Value> {
 #[get("/minerstats/<address>")]
 fn minerstats(app: State<Arc<App>>, address: &RawStr) -> Json<Value> {
   let address = address.as_str();
-  if !app.address_pattern.is_match(address) {
-    let no_data: Vec<String> = Vec::new();
-    Json(json!({
-      "hashrates": no_data
-    }))
-  }
-  else {
-    let no_data: Vec<String> = Vec::new();
-    // TODO reimplement this in postgres
-    Json(json!({
-      "hashrates": no_data,
-    }))
-  }
+  let hashrates = app.db.hashrates_by_address(&app.address_pattern, address);
+  Json(json!({
+    "hashrates": hashrates,
+  }))
 }
 
 pub fn init(app: Arc<App>) {

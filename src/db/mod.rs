@@ -5,6 +5,7 @@ use diesel::prelude::*;
 use dotenv::dotenv;
 use diesel;
 use std::env;
+use regex::Regex;
 use r2d2_diesel::ConnectionManager;
 use r2d2::Pool;
 use db::schema::*;
@@ -191,8 +192,40 @@ impl DbAccess {
         "SELECT CAST(SUM(shares) AS BIGINT) AS shares, miner_alias, \
          date_trunc('hour', created) + date_part('minute', created)::int / 5 * interval '5 min' \
          AS created_minute \
-         FROM valid_share GROUP BY miner_alias, created_minute"
+         FROM valid_share GROUP BY miner_alias, created_minute \
+         ORDER BY created_minute"
       ).load(&*conn);
+      match result {
+        Ok(stats) => stats,
+        Err(err) => {
+          warn!("Failed to get miner stats: {:?}", err);
+          vec![]
+        },
+      }
+    }
+    else {
+      vec![]
+    }
+  }
+
+  pub fn hashrates_by_address(&self, address_pattern: &Regex, address: &str) -> Vec<MinerStats> {
+    if !address_pattern.is_match(address) {
+      // Checking against the address pattern is important - we're not using diesel's query builder
+      // in this method, so we rely on the fact that addresses are alphanumeric to prevent SQL
+      // injection.
+      return vec![];
+    }
+    if let Ok(conn) = self.conn_pool.get() {
+      let query = format!(
+        "SELECT CAST(SUM(shares) AS BIGINT) AS shares, miner_alias, \
+         date_trunc('hour', created) + date_part('minute', created)::int / 5 * interval '5 min' \
+         AS created_minute \
+         FROM valid_share WHERE address='{}' \
+         GROUP BY miner_alias, created_minute \
+         ORDER BY created_minute",
+        address,
+      );
+      let result = diesel::sql_query(query).load(&*conn);
       match result {
         Ok(stats) => stats,
         Err(err) => {
