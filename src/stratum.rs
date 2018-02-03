@@ -1,9 +1,11 @@
 use jsonrpc_core::*;
+use jsonrpc_core::futures::sink::Sink;
 use jsonrpc_core::serde_json::{Map};
 use jsonrpc_core::futures::sync::mpsc::*;
 use jsonrpc_tcp_server::*;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use lru_time_cache::*;
 use schedule_recv::periodic_ms;
 use std::thread;
@@ -25,6 +27,7 @@ struct StratumServer {
   config: ServerConfig,
   app: Arc<App>,
   miner_connections: Mutex<LruCache<String, Arc<Miner>>>,
+  miner_bans: Mutex<LruCache<IpAddr, bool>>,
   job_provider: Arc<JobProvider>,
   nonce_pattern: Regex,
 }
@@ -32,12 +35,18 @@ struct StratumServer {
 impl StratumServer {
   fn new(app: Arc<App>, server_config: &ServerConfig, job_provider: Arc<JobProvider>)
          -> StratumServer {
-    let time_to_live = ::std::time::Duration::from_secs(60 * 60 * 2);
+    let time_to_live = Duration::from_secs(60 * 60 * 2);
+    // We only issue short bans - these are just to keep people from being able to cheaply overload
+    // the server by falsely submitting low-difficulty shares.
+    let ban_length = Duration::from_secs(60 * 5);
     StratumServer {
       config: server_config.clone(),
       app,
       miner_connections: Mutex::new(
         LruCache::with_expiry_duration_and_capacity(time_to_live, server_config.max_connections.unwrap_or(10000))
+      ),
+      miner_bans: Mutex::new(
+        LruCache::with_expiry_duration(ban_length),
       ),
       job_provider,
       nonce_pattern: Regex::new("[0-9a-f]{8}").unwrap()
@@ -61,6 +70,9 @@ impl StratumServer {
   }
 
   fn login(&self, params: Map<String, Value>, meta: Meta) -> Result<Value> {
+    if self.is_banned(&meta.peer_addr.unwrap().ip()) {
+      return self.ban_message();
+    }
     if let None = meta.peer_addr {
       return Err(Error::internal_error());
     }
@@ -68,8 +80,11 @@ impl StratumServer {
       let mut login_parts = login.split(":");
       let address = login_parts.next().unwrap();
       let alias = login_parts.next().map(|a| a.to_owned());
+      if alias.to_owned().map_or(false, |a| a.len() > 100) {
+        return Err(Error::invalid_params("Miner alias can be at most 100 characters"));
+      }
       if !self.app.address_pattern.is_match(address) {
-        return Err(Error::invalid_params("Miner ID must be alphanumeric"));
+        return Err(Error::invalid_params("Invalid wallet address in login parameters"));
       }
       let miner = Miner::new(address, alias, meta.peer_addr.unwrap(), meta.sender.unwrap().clone(),
                              self.config.starting_difficulty as usize);
@@ -94,32 +109,64 @@ impl StratumServer {
     }
   }
 
-  fn submit(&self, params: Map<String, Value>, _meta: Meta) -> Result<Value> {
-    if let Some(miner) = self.getminer(&params) {
-      if !self.app.address_pattern.is_match(&miner.address) {
-        return Err(Error::invalid_params("Miner ID must be alphanumeric"));
-      }
-      if let Some(&Value::String(ref job_id)) = params.get("job_id") {
-        if let Some(job) = miner.jobs.lock().unwrap().get(job_id) {
-          if let Some(&Value::String(ref nonce)) = params.get("nonce") {
-            if !self.nonce_pattern.is_match(nonce) {
-              return Err(Error::invalid_params("nonce must be 8 hex digits"));
-            }
-            miner.adjust_difficulty(job.difficulty, &self.config);
+  fn ban_ip(&self, ip: &IpAddr) {
+    self.miner_bans.lock().unwrap().insert(ip.to_owned(), true);
+  }
 
-            return match job.check_submission(nonce) {
-              JobResult::BlockFound(block) => {
-                match self.app.daemon.submit_block(&block.blob) {
-                  Ok(_) => self.app.db.block_found(block, &miner, &job),
-                  Err(err) => warn!("Failed to send block to daemon: {:?}", err)
-                };
-                Ok(Value::String("Submission accepted".to_owned()))
-              },
-              JobResult::SharesAccepted => {
-                self.app.db.shares_accepted(&miner, &job);
-                Ok(Value::String("Submission accepted".to_owned()))
-              },
-              JobResult::SharesRejected => Err(Error::invalid_params("Share rejected")),
+  fn is_banned(&self, ip: &IpAddr) -> bool {
+    self.miner_bans.lock().unwrap().peek(ip)
+      .unwrap_or(&false)
+      .to_owned()
+  }
+
+  fn ban_message(&self) -> Result<Value> {
+    Err(Error::invalid_params(
+      "Your IP has received a short temporary ban due to an invalid share.  Usually this is \
+       due to a mistake configuring xmr-stak/xmrig/cpuminer/etc.  Typically the relevant config \
+       option is named something like 'currency' or 'hashtype' - that value in your config needs \
+       to match up with the pool you are connecting to."
+    ))
+  }
+
+  fn submit(&self, params: Map<String, Value>, meta: Meta) -> Result<Value> {
+    if let Some(addr) = meta.peer_addr {
+      if self.is_banned(&addr.ip()) {
+        return self.ban_message();
+      }
+
+      if let Some(miner) = self.getminer(&params) {
+        if !self.app.address_pattern.is_match(&miner.address) {
+          return Err(Error::invalid_params("Miner ID must be alphanumeric"));
+        }
+        if let Some(&Value::String(ref job_id)) = params.get("job_id") {
+          if let Some(job) = miner.jobs.lock().unwrap().get(job_id) {
+            if let Some(&Value::String(ref nonce)) = params.get("nonce") {
+              if !self.nonce_pattern.is_match(nonce) {
+                return Err(Error::invalid_params("nonce must be 8 hex digits"));
+              }
+              miner.adjust_difficulty(job.difficulty, &self.config);
+
+              return match job.check_submission(nonce) {
+                JobResult::BlockFound(block) => {
+                  match self.app.daemon.submit_block(&block.blob) {
+                    Ok(_) => self.app.db.block_found(block, &miner, &job),
+                    Err(err) => warn!("Failed to send block to daemon: {:?}", err)
+                  };
+                  Ok(Value::String("Submission accepted".to_owned()))
+                },
+                JobResult::SharesAccepted => {
+                  self.app.db.shares_accepted(&miner, &job);
+                  Ok(Value::String("Submission accepted".to_owned()))
+                },
+                JobResult::SharesRejected => {
+                  info!("Banning IP {} due to bad share", addr.ip());
+                  self.ban_ip(&addr.ip());
+                  if let Err(err) = meta.sender.unwrap().close() {
+                    info!("Failed to close connection while banning miner: {:?}", err);
+                  }
+                  Err(Error::invalid_params("Share rejected"))
+                },
+              }
             }
           }
         }
