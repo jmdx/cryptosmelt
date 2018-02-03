@@ -47,13 +47,13 @@ impl Unlocker {
   /// Appends donation fee shares, and returns the new total count of shares.  The pool fee is
   /// included in the returned total share count, but not appended to the share counts array, since
   /// there is no transaction needed to move funds from the pool to itself.
-  fn append_fees(&self, share_counts: &mut Vec<BlockShare>) -> u64 {
+  fn append_fees(share_counts: &mut Vec<BlockShare>, config: &Config) -> u64 {
     let miner_shares: u64 = share_counts.iter().map(|share| share.shares).sum();
-    let dev_fee_percent: f64 = self.app.config.donations.iter().map(|donation| donation.percentage).sum();
-    let total_fee_ratio: f64 = (self.app.config.pool_fee + dev_fee_percent) / 100.0;
+    let dev_fee_percent: f64 = config.donations.iter().map(|donation| donation.percentage).sum();
+    let total_fee_ratio: f64 = (config.pool_fee + dev_fee_percent) / 100.0;
     let miner_share_portion: f64 = 1.0 - total_fee_ratio;
     let total_shares = (miner_shares as f64 * (1.0 / miner_share_portion)).round() as u64;
-    for &Donation { ref address, ref percentage } in &self.app.config.donations {
+    for &Donation { ref address, ref percentage } in &config.donations {
       share_counts.push(BlockShare {
         shares: (total_shares as f64 * (percentage / 100.0)).round() as u64,
         address: address.to_owned(),
@@ -72,7 +72,7 @@ impl Unlocker {
         is_fee: false,
       }
     }).collect();
-    let total_shares = self.append_fees(&mut share_counts);
+    let total_shares = Self::append_fees(&mut share_counts, &self.app.config);
     self.app.db.distribute_balances(reward, block_id, share_counts, total_shares);
   }
 
@@ -151,8 +151,7 @@ mod tests {
       address: "miner2".to_owned(),
       is_fee: false,
     }];
-    let unlocker = Unlocker::new(Arc::new(App::new(fee_config)));
-    let total_shares = unlocker.append_fees(&mut example_shares);
+    let total_shares = Unlocker::append_fees(&mut example_shares, &fee_config);
     // Because the total fee percentage is 25% (an unrealistic but easy-to-reason-about number), 75%
     // of shares should go to the miners.
     assert_eq!(total_shares * 3 / 4, 150000 + 50000);

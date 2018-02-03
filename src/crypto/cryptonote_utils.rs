@@ -137,7 +137,7 @@ pub fn tree_hash(hashes: Vec<Vec<u8>>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-  use cryptonote_utils::*;
+  use crypto::cryptonote_utils::*;
 
   #[test]
   fn test_bytes_to_hex () {
