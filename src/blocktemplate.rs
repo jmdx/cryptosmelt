@@ -48,7 +48,6 @@ impl Job {
     }
     let previous_submission = self.submissions.insert(nonce.to_owned(), true);
     if let Some(_) = previous_submission {
-      // TODO we'll probably want some auto banning functionality in place here
       return JobResult::SharesRejected;
     }
     let blob = &self.hashing_blob;

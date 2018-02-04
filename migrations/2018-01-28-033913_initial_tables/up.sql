@@ -4,7 +4,6 @@ CREATE TABLE valid_share (
   address VARCHAR(100) NOT NULL,
   miner_alias VARCHAR(100) NOT NULL,
   shares BIGINT NOT NULL
-  -- TODO enforce the character limit
 );
 CREATE TABLE found_block (
   block_id TEXT NOT NULL PRIMARY KEY,

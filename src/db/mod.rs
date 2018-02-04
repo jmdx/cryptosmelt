@@ -105,7 +105,6 @@ impl DbAccess {
   }
 
   pub fn block_progress(&self, block_id: &String, progress: u64) {
-    // TODO probably just make this a field on found_block
     let new_progress = NewBlockProgress {
       block_depth: progress as i64,
       block_id,
@@ -144,8 +143,7 @@ impl DbAccess {
         .values(&balance_changes)
         .get_result::<MinerBalance>(&*conn);
       if let Err(err) = result {
-        // TODO probably retry in this case
-        warn!("Payments initiated at {}, but failed to subtract payments from miner balances: {:?}",
+        panic!("Payments initiated at {}, but failed to subtract payments from miner balances: {:?}",
                tx_hash, err);
       }
 
