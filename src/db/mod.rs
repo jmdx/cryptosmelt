@@ -237,6 +237,24 @@ impl DbAccess {
     }
   }
 
+  pub fn transactions_by_address(&self, address: &str) -> Vec<MinerBalance> {
+    use db::schema::miner_balance::dsl;
+    if let Ok(conn) = self.conn_pool.get() {
+      let result = dsl::miner_balance.filter(dsl::address.eq(address))
+        .load(&*conn);
+      match result {
+        Ok(blocks) => blocks,
+        Err(err) => {
+          warn!("Failed to get transactions: {:?}", err);
+          vec![]
+        },
+      }
+    }
+    else {
+      vec![]
+    }
+  }
+
   pub fn pending_submitted_blocks(&self) -> Vec<FoundBlock> {
     use db::schema::found_block::dsl;
     if let Ok(conn) = self.conn_pool.get() {

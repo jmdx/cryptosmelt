@@ -52,7 +52,7 @@ pub struct NewFoundBlock<'a> {
   pub status: i32,
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Serialize)]
 pub struct MinerBalance {
   pub id: i32,
   pub created: NaiveDateTime,
