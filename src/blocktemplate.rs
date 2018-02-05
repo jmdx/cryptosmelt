@@ -173,13 +173,16 @@ impl JobProvider {
         if let Some(result) = template.get("result") {
           let parsed_template: StdResult<BlockTemplate, serde_json::Error> =
             serde_json::from_value(result.clone());
-          if let Ok(new_template) = parsed_template {
-            let mut current_template = self.template.write().unwrap();
-            if new_template.prev_hash != current_template.prev_hash {
-              info!("New block template of height {}.", new_template.height);
-              *current_template = new_template;
-              return true;
-            }
+          match parsed_template {
+            Ok(new_template) => {
+              let mut current_template = self.template.write().unwrap();
+              if new_template.height > current_template.height {
+                info!("New block template of height {}.", new_template.height);
+                *current_template = new_template;
+                return true;
+              }
+            },
+            Err(err) => error!("Failed to parse block template: {:?}", err),
           }
         }
       },
@@ -191,11 +194,10 @@ impl JobProvider {
 
 #[derive(Deserialize, Default)]
 pub struct BlockTemplate {
-  blockhashing_blob: String,
+  // TODO make this optional, looks like newer cryptonote coins don't support it
   blocktemplate_blob: String,
   difficulty: u64,
   height: u64,
-  prev_hash: String,
   reserved_offset: u32,
 }
 
@@ -223,7 +225,7 @@ impl BlockTemplate {
     let num_hashes = bytes_to_hex(to_varint(tx_hashes.len()));
     let root_hash = bytes_to_hex(tree_hash(tx_hashes));
     return Some(
-      format!("{}{}{}", &self.blockhashing_blob[..BLOCK_HEADER_LENGTH], &root_hash, &num_hashes)
+      format!("{}{}{}", &self.blocktemplate_blob[..BLOCK_HEADER_LENGTH], &root_hash, &num_hashes)
     );
   }
 }
@@ -234,9 +236,9 @@ mod tests {
 
   #[test]
   fn test_parse_block_template() {
+    let test_hashing_blob = "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e\
+      41bc4d70000000005c8e57bea6b5667f77529149756c249904fb346916f7580c18ea64ec793334e903".to_owned();
     let test_block = BlockTemplate {
-      blockhashing_blob: "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e41bc4\
-    d70000000005c8e57bea6b5667f77529149756c249904fb346916f7580c18ea64ec793334e903".to_owned(),
       blocktemplate_blob: "010094fed5d205e42c97122a7b61341c46881837099891d2b2587a0bde019cbae1688e41bc\
     4d700000000001e1cf3701ffa5cf3705fbf3b1e40b02d2961caddbcd6294b41030ecf24fadc4229fc45c75df5def56d\
     c1841236db36380f8cce2840202bdba3913153bbbbd8c40a8b9409fe8944bb9964edd905506b558f8eadf027b858080\
@@ -247,16 +249,16 @@ mod tests {
     7bfcacae531ddf666352c45b25569c8d894ed8a327d9fb3c361ed0e7e0433190fe9fec".to_owned(),
       difficulty: 0,
       height: 0,
-      prev_hash: "".to_owned(),
       reserved_offset: 285,
     };
-    assert_eq!(test_block.blockhashing_blob,
+    assert_eq!(test_hashing_blob,
                test_block.hashing_blob_with_nonce("0000000000000000").unwrap());
 
     // Kind of weird, but turns out it is possible to have blocks with just miner transactions.
+    let empty_block_hashing_blob = "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e20859\
+      48e8bb148e862b8000000007f8e1bb9aaccac84169ccf9a9a33ac704960e252e05218d19d93a147a396922901"
+      .to_owned();
     let test_empty_block = BlockTemplate {
-      blockhashing_blob: "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e2085948e8bb148e862\
-    b8000000007f8e1bb9aaccac84169ccf9a9a33ac704960e252e05218d19d93a147a396922901".to_owned(),
       blocktemplate_blob: "0100a5b6e1d205ae9d4d429436d01430aaed0fd1a3823c46a14b5c993e2085948e8bb148e8\
     62b80000000001bfd53701ff83d53705e7aee92d0236238d7c671cd670c1e5d145aa38407aa7c4caf78c9c3a5086126\
     c3d1e6d8bd48090dfc04a0288d398bf66e39e28888192a76534060cf698d293d3ed36ba25b23952ee8681a58080dd9d\
@@ -266,10 +268,9 @@ mod tests {
     3797aba88cc0208000000000000000000".to_owned(),
       difficulty: 0,
       height: 0,
-      prev_hash: "".to_owned(),
       reserved_offset: 283,
     };
-    assert_eq!(test_empty_block.blockhashing_blob,
+    assert_eq!(empty_block_hashing_blob,
                test_empty_block.hashing_blob_with_nonce("0000000000000000").unwrap());
   }
 }
