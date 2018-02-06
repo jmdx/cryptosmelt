@@ -170,6 +170,7 @@ impl StratumServer {
             }
           }
         }
+        debug!("Miner submitted incompatible parameters: {:?}", params)
       }
     }
     Err(Error::invalid_params("No miner with this ID"))
