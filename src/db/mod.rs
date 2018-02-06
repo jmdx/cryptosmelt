@@ -190,7 +190,8 @@ impl DbAccess {
         "SELECT CAST(SUM(shares) AS BIGINT) AS shares, miner_alias, \
          date_trunc('hour', created) + date_part('minute', created)::int / 5 * interval '5 min' \
          AS created_minute \
-         FROM valid_share GROUP BY miner_alias, created_minute \
+         FROM valid_share WHERE created > now() - interval '24 hours' \
+         GROUP BY miner_alias, created_minute \
          ORDER BY created_minute"
       ).load(&*conn);
       match result {
@@ -218,7 +219,7 @@ impl DbAccess {
         "SELECT CAST(SUM(shares) AS BIGINT) AS shares, miner_alias, \
          date_trunc('hour', created) + date_part('minute', created)::int / 5 * interval '5 min' \
          AS created_minute \
-         FROM valid_share WHERE address='{}' \
+         FROM valid_share WHERE address='{}' AND created > now() - interval '24 hours' \
          GROUP BY miner_alias, created_minute \
          ORDER BY created_minute",
         address,
