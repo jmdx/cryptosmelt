@@ -1,0 +1,2 @@
+DROP INDEX valid_share_created_idx;
+DROP INDEX valid_share_expr_miner_alias_idx;
