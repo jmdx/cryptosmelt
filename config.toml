@@ -9,6 +9,10 @@ daemon_url="http://localhost:28081/json_rpc"
 wallet_url="http://localhost:28082/json_rpc"
 
 payment_mixin=2
+# On monero-related coins the network transaction fee is set by the daemon so the value below will go unused, but on
+# other cryptonote forks this should generally be 10^7 units, which is 0.01 of that cryptocurrency if the currency
+# denomination is 10^9.
+network_transaction_fee=10000000
 min_payment=0.1
 payment_denomination=0.01
 pool_wallet="9wviCeWe2D8XS82k2ovp5EUYLzBt9pYNW2LXUFsZiv8S3Mt21FZ5qQaAroko1enzw3eGr9qC7X1D7Geoo2RrAotYPwq9Gm8"

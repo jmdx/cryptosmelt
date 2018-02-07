@@ -10,6 +10,7 @@ pub struct Config {
   pub daemon_url: String,
   pub wallet_url: String,
   pub payment_mixin: u64,
+  pub network_transaction_fee: u64,
   pub min_payment: f64,
   pub payment_denomination: f64,
   pub pool_wallet: String,

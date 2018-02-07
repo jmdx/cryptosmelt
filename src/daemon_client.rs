@@ -12,7 +12,7 @@ pub struct Transfer {
 
 #[derive(Deserialize)]
 pub struct TransferResult {
-  pub fee: u64,
+  pub fee: Option<u64>,
   pub tx_hash: String,
 }
 
@@ -20,6 +20,7 @@ pub struct TransferResult {
 pub struct BlockHeader {
   pub hash: String,
   pub reward: u64,
+  pub orphan_status: bool,
   pub depth: u64,
 }
 
@@ -46,8 +47,8 @@ impl DaemonClient {
     }))
   }
 
-  pub fn get_block_header(&self, height: u64) -> Result<BlockHeader, String> {
-    match self.call_daemon(&self.config.daemon_url, "getblockheaderbyheight", json!({"height": height})) {
+  pub fn get_block_header(&self, hash: &String) -> Result<BlockHeader, String> {
+    match self.call_daemon(&self.config.daemon_url, "getblockheaderbyhash", json!({"hash": hash})) {
       Ok(value) => {
         let bad_header_response = "Bad header response from daemon";
         let block_header = value.as_object()
@@ -69,11 +70,13 @@ impl DaemonClient {
   pub fn transfer(&self, transfers: &[Transfer]) -> Result<TransferResult, String> {
     match self.call_daemon(&self.config.wallet_url, "transfer", json!({
       "destinations": transfers,
-      "fee": 0.01, // The fee is specified, in the wallet API, but ignored
+      // The fee is specified, in the wallet API, but ignored by many coins
+      "fee": self.config.network_transaction_fee,
       "mixin": self.config.payment_mixin,
       "unlock_time": 0,
     })) {
       Ok(value) => {
+        trace!("Daemon response for transfer: {:?}", value);
         let error_msg = format!("Bad transfer response from daemon: {:?}", &value);
         let transfer_result = value.as_object()
           .ok_or(error_msg.to_owned())?

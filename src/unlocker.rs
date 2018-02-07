@@ -23,11 +23,11 @@ impl Unlocker {
 
   pub fn process_blocks(&self) {
     let blocks = self.app.db.pending_submitted_blocks();
-    for FoundBlock { block_id, height, .. } in blocks {
-      let header_for_height = self.app.daemon.get_block_header(height as u64);
-      match header_for_height {
+    for FoundBlock { block_id, .. } in blocks {
+      let header_for_hash = self.app.daemon.get_block_header(&block_id);
+      match header_for_hash {
         Ok(header) => {
-          if header.hash != block_id {
+          if header.hash != block_id || header.orphan_status {
             self.app.db.block_status(&block_id, BlockStatus::Orphaned);
           }
           else if header.depth >= 60 {
@@ -79,6 +79,7 @@ impl Unlocker {
   pub fn process_payments(&self) {
     let payment_units_per_currency: f64 = 1e12;
     let min_payment = (self.app.config.min_payment * payment_units_per_currency) as i64;
+
     let mut transfers = vec![];
     let balance_totals = self.app.db.miner_balance_totals();
     let pending_payments = balance_totals.iter()
@@ -96,6 +97,9 @@ impl Unlocker {
           });
         }
       }
+      else {
+        info!("Skipping payment of {} to {} due to malformed address.", amount, address);
+      }
     }
     if transfers.len() == 0 {
       return;
@@ -108,7 +112,12 @@ impl Unlocker {
       // transaction between our database and the daemon.
       match self.app.daemon.transfer(&transfers) {
         Ok(result) => {
-          self.app.db.log_transfers(&transfers, &result.tx_hash, result.fee);
+          // Some flavors of the simplewallet RPC API return a fee, because the fee gets
+          // automatically determined by simplewallet.  On others, simplewallet simply uses the fee
+          // value it receives.  We assume that if simplewallet does not give us back a value for
+          // the transaction fee, then it has used the value we fed it.
+          let transaction_fee = result.fee.unwrap_or(self.app.config.network_transaction_fee);
+          self.app.db.log_transfers(&transfers, &result.tx_hash, transaction_fee);
         },
         Err(err) => error!("Failed to initiate transfer: {:?}", err),
       }
