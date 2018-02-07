@@ -141,6 +141,7 @@ mod tests {
       daemon_url: String::new(),
       wallet_url: String::new(),
       payment_mixin: 0,
+      network_transaction_fee: 0,
       min_payment: 0.0,
       payment_denomination: 0.0,
       pool_wallet: "pool".to_owned(),
