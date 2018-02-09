@@ -275,6 +275,23 @@ impl DbAccess {
     }
   }
 
+  pub fn all_blocks(&self) -> Vec<FoundBlock> {
+    use db::schema::found_block::dsl;
+    if let Ok(conn) = self.conn_pool.get() {
+      let result = dsl::found_block.load(&*conn);
+      match result {
+        Ok(blocks) => blocks,
+        Err(err) => {
+          warn!("Failed to get blocks: {:?}", err);
+          vec![]
+        },
+      }
+    }
+    else {
+      vec![]
+    }
+  }
+
   pub fn last_unlocked_block_time(&self) -> Option<::chrono::NaiveDateTime> {
     use db::schema::found_block::dsl;
     use diesel::dsl::min;

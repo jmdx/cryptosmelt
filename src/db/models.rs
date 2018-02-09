@@ -37,7 +37,7 @@ impl From<i32> for BlockStatus {
     }
   }
 }
-#[derive(Queryable)]
+#[derive(Queryable, Serialize)]
 pub struct FoundBlock {
   pub block_id: String,
   pub created: NaiveDateTime,

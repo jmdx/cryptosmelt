@@ -11,6 +11,8 @@ use serde_json::*;
 fn poolstats(app: State<Arc<App>>) -> Json<Value> {
   let hashrates = app.db.get_hashrates();
   Json(json!({
+    "total_fee": app.total_fee(),
+    "blocks": app.db.all_blocks(),
     "hashrates": hashrates,
   }))
 }

@@ -24,4 +24,11 @@ impl App {
       )).unwrap()
     }
   }
+
+  pub fn total_fee(&self) -> f64 {
+    let donation_fees: f64 = self.config.donations.iter()
+      .map(|donation| donation.percentage)
+      .sum();
+    self.config.pool_fee + donation_fees
+  }
 }
