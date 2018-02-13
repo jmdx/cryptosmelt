@@ -64,6 +64,23 @@ impl Unlocker {
   }
 
   pub fn assign_balances(&self, block_id: &str, reward: u64) {
+    let network_fee = self.app.config.network_transaction_fee;
+    let adjusted_reward = if reward > 10 * network_fee {
+      reward - network_fee
+    } else {
+      error!(
+        "The value for network_transaction_fee in the config is unusually high, so cryptosmelt will \
+         attempt to distribute balances without accounting for the network fee.  Please double \
+         check that value in the config - otherwise there is a chance of the pool getting stuck \
+         waiting to have enough funds to pay miners and cover the transaction fee.  Feel free to \
+         open an issue on cryptosmelt's github if you run into troubles here."
+      );
+      reward
+    };
+    warn!(
+      "Assigning balances for found block.  Reward: {}, Reward after network fee: {}.",
+      reward, adjusted_reward,
+    );
     let shares = self.app.db.unpaid_shares();
     let mut share_counts: Vec<BlockShare> = shares.iter().map(|share| {
       BlockShare {
@@ -73,7 +90,7 @@ impl Unlocker {
       }
     }).collect();
     let total_shares = Self::append_fees(&mut share_counts, &self.app.config);
-    self.app.db.distribute_balances(reward, block_id, share_counts, total_shares);
+    self.app.db.distribute_balances(adjusted_reward, block_id, share_counts, total_shares);
   }
 
   pub fn process_payments(&self) {

@@ -1,6 +1,7 @@
 # Cryptosmelt
 Cryptonote and Cryptonote-Lite pool software, written in Rust and using Postgres as the data store.
-__This does not have any payment/reward system in place, so is not ready for use.__
+Currently cryptosmelt is round-based-pay-per-share only, but there are plans to include other reward mechanisms,
+particularly PPLNS, in the future.
 
 # Dependencies
 - Rust (nightly version)
@@ -17,7 +18,7 @@ rustup install nightly
 
 *Nightly is needed because of the dependency upon [mithril's](https://github.com/Ragnaroek/mithril) Cryptonight hash implementation.*
 
-Finally, checkout this repo and enter your pool wallet address (currently Aeon-only) as `pool_wallet` in `config.toml`.  Then execute `cargo run` and the server will listen on the ports configured in that file.
+Then checkout this repo and enter your pool wallet address as `pool_wallet` in `config.toml`.  Then execute `cargo run` and the server will listen on the ports configured in that file.
 
 # Recommended tools
 
