@@ -15,11 +15,11 @@ pub fn bytes_to_hex(bytes: Vec<u8>) -> String {
   hexes.join("")
 }
 
-pub fn cn_hash(input: &Vec<u8>, hash_type: &HashType) -> String {
+pub fn cn_hash(input: &Vec<u8>, hash_type: &HashType, version: hash::HashVersion) -> String {
   let aes = aes::new(aes::AESSupport::HW);
   match hash_type {
-    &HashType::Cryptonight => hash::hash_alloc_scratchpad(input, &aes),
-    &HashType::CryptonightLite => cryptonightlite::hash_alloc_scratchpad(input, &aes),
+    &HashType::Cryptonight => hash::hash_alloc_scratchpad(input, &aes, version),
+    &HashType::CryptonightLite => cryptonightlite::hash_alloc_scratchpad(input, &aes, version),
   }
 }
 
@@ -148,11 +148,14 @@ mod tests {
   fn test_hash() {
     use mithril::byte_string;
     let input = byte_string::string_to_u8_array("");
-    assert_eq!(cn_hash(&input, &HashType::Cryptonight), "eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
+    assert_eq!(cn_hash(&input, &HashType::Cryptonight, hash::HashVersion::Version6),
+               "eb14e8a833fac6fe9a43b57b336789c46ffe93f2868452240720607b14387e11");
     // Test case taken from https://github.com/ExcitableAardvark/node-cryptonight-lite
-    assert_eq!(cn_hash(&input, &HashType::CryptonightLite), "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
+    assert_eq!(cn_hash(&input, &HashType::CryptonightLite, hash::HashVersion::Version6),
+               "4cec4a947f670ffdd591f89cdb56ba066c31cd093d1d4d7ce15d33704c090611");
     let input2 = byte_string::string_to_u8_array("5468697320697320612074657374");
-    assert_eq!(cn_hash(&input2, &HashType::CryptonightLite), "88e5e684db178c825e4ce3809ccc1cda79cc2adb4406bff93debeaf20a8bebd9");
+    assert_eq!(cn_hash(&input2, &HashType::CryptonightLite, hash::HashVersion::Version6),
+               "88e5e684db178c825e4ce3809ccc1cda79cc2adb4406bff93debeaf20a8bebd9");
   }
 
 

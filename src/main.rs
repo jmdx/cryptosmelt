@@ -1,4 +1,3 @@
-#![feature(i128_type)]
 #![feature(box_syntax)]
 #![feature(slice_patterns)]
 #![feature(plugin)]

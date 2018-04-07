@@ -43,7 +43,7 @@ features = ["json"]
 
 [dependencies.mithril]
 git = 'https://github.com/Ragnaroek/mithril'
-rev = 'b45fd61b94d105411f21e3ab144a5707ba444331'
+rev = 'a847ab68f3104b0321cba2c83269efaa975ced67'
 
 [dependencies.uuid]
 version = "0.4"

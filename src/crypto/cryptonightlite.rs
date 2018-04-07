@@ -2,6 +2,7 @@
 
 use mithril::cryptonight::aes::{AES};
 use mithril::cryptonight::keccak::*;
+use mithril::cryptonight::hash::HashVersion;
 use mithril::u64x2::u64x2;
 use std::boxed::Box;
 
@@ -16,29 +17,43 @@ pub const MEM_SIZE : usize = 2097152 / 32;
 const ITERATIONS : u32 = 524288 / 2;
 
 /// This is mainly for testing, allocates a new scratchpad on every hash
-pub fn hash_alloc_scratchpad(input: &[u8], aes: &AES) -> String {
+pub fn hash_alloc_scratchpad(input: &[u8], aes: &AES, version: HashVersion) -> String {
   let mut scratchpad : Box<[u64x2; MEM_SIZE]> = box [u64x2(0,0); MEM_SIZE];
-  return hash(&mut scratchpad, input, aes);
+  hash(&mut scratchpad, input, aes, version)
 }
 
-pub fn hash(mut scratchpad : &mut Box<[u64x2; MEM_SIZE]>, input: &[u8], aes: &AES) -> String {
+pub fn hash(mut scratchpad : &mut [u64x2; MEM_SIZE], input: &[u8], aes: &AES, version: HashVersion) -> String {
   //scratchpad init
   let mut state = keccak(input);
-  init_scratchpad(&mut scratchpad, &mut state, &aes);
+  init_scratchpad(&mut scratchpad, &mut state, aes);
 
   let mut a = u64x2::read(&state[0..16]) ^ u64x2::read(&state[32..48]);
   let mut b = u64x2::read(&state[16..32]) ^ u64x2::read(&state[48..64]);
+
+  let monero_const = if version == HashVersion::Version6 {
+    0
+  } else {
+    monero_const(input, &state)
+  };
 
   let mut i = 0;
   while i < ITERATIONS {
     let mut ix = scratchpad_addr(&a);
     let aes_result = aes.aes_round(scratchpad[ix], a);
-    scratchpad[ix] = b ^ aes_result;
+    if version == HashVersion::Version6 {
+      scratchpad[ix] = b ^ aes_result;
+    } else {
+      scratchpad[ix] = cryptonight_monero_tweak(&(b ^ aes_result));
+    }
 
     ix = scratchpad_addr(&aes_result);
+
     let mem = scratchpad[ix];
     let add_r = ebyte_add(&a, &ebyte_mul(&aes_result, &mem));
     scratchpad[ix] = add_r;
+    if version == HashVersion::Version7 {
+      scratchpad[ix].1 = add_r.1 ^ monero_const;
+    }
 
     a = add_r ^ mem;
     b = aes_result;
@@ -46,7 +61,7 @@ pub fn hash(mut scratchpad : &mut Box<[u64x2; MEM_SIZE]>, input: &[u8], aes: &AE
     i += 1;
   }
 
-  let final_result = finalise_scratchpad(scratchpad, &mut state, &aes);
+  let final_result = finalise_scratchpad(scratchpad, &mut state, aes);
 
   let mut k = 0;
   while k < 8 {
@@ -59,7 +74,22 @@ pub fn hash(mut scratchpad : &mut Box<[u64x2; MEM_SIZE]>, input: &[u8], aes: &AE
   let state_64 = transmute_u64(&mut state);
   keccakf(state_64);
 
-  return final_hash(transmute_u8(state_64));
+  final_hash(transmute_u8(state_64))
+}
+
+pub fn cryptonight_monero_tweak(tmp: &u64x2) -> u64x2 {
+  let mut vh = tmp.1;
+  let x = (vh >> 24) as u8;
+  let index = (((x >> 3) & 6) | (x & 1)) << 1;
+  vh ^= ((0x7531 >> index) & 0x3) << 28;
+  u64x2(tmp.0, vh)
+}
+
+pub fn monero_const(input: &[u8], state: &[u8]) -> u64 {
+  //TODO u64x2 just for first version, create dedicated and faster conversion from u8 -> u64
+  let ip = u64x2::read(&input[35..43]);
+  let ip2 = u64x2::read(&state[(8*24)..(8*24+8)]);
+  ip.0 ^ ip2.0
 }
 
 fn final_hash(keccak_state: &[u8; 200]) -> String {
@@ -112,7 +142,7 @@ pub fn scratchpad_addr(u: &u64x2) -> usize {
   return ((u.0 & 0xFFFF0) >> 4) as usize;
 }
 
-pub fn finalise_scratchpad(scratchpad: &mut Box<[u64x2; MEM_SIZE]>, keccak_state: &mut [u8; 200], aes: &AES) -> [u64x2; 8] {
+pub fn finalise_scratchpad(scratchpad: &mut [u64x2; MEM_SIZE], keccak_state: &mut [u8; 200], aes: &AES) -> [u64x2; 8] {
   let t_state = transmute_u64(keccak_state);
   let input0 = u64x2(t_state[4], t_state[5]);
   let input1 = u64x2(t_state[6], t_state[7]);
@@ -150,10 +180,10 @@ pub fn finalise_scratchpad(scratchpad: &mut Box<[u64x2; MEM_SIZE]>, keccak_state
     }
     k += 8;
   }
-  return state;
+  state
 }
 
-pub fn init_scratchpad(scratchpad : &mut Box<[u64x2; MEM_SIZE]>, state: &mut [u8; 200], aes: &AES) {
+pub fn init_scratchpad(scratchpad : &mut [u64x2; MEM_SIZE], state: &mut [u8; 200], aes: &AES) {
   let t_state = transmute_u64(state);
   let input0 = u64x2(t_state[0], t_state[1]);
   let input1 = u64x2(t_state[2], t_state[3]);

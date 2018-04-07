@@ -7,6 +7,7 @@ use std::cmp::min;
 use uuid::*;
 use jsonrpc_core::*;
 use mithril::byte_string;
+use mithril::cryptonight::hash;
 use concurrent_hashmap::*;
 use app::App;
 
@@ -61,7 +62,13 @@ impl Job {
     let (pre_nonce, _) = blob.split_at(BLOCK_HEADER_LENGTH - 8);
     let (_, post_nonce) = blob.split_at(BLOCK_HEADER_LENGTH);
     let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", pre_nonce, nonce, post_nonce));
-    let hash = cn_hash(&hash_input, &self.hash_type);
+    let version = if pre_nonce.starts_with("0707") {
+      hash::HashVersion::Version7
+    }
+    else {
+      hash::HashVersion::Version6
+    };
+    let hash = cn_hash(&hash_input, &self.hash_type, version);
     let hash_val = byte_string::hex2_u64_le(&hash[48..]);
     let achieved_difficulty = u64::max_value() / hash_val;
     if achieved_difficulty >= self.difficulty {
