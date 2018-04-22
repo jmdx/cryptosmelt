@@ -62,7 +62,11 @@ impl Job {
     let (pre_nonce, _) = blob.split_at(BLOCK_HEADER_LENGTH - 8);
     let (_, post_nonce) = blob.split_at(BLOCK_HEADER_LENGTH);
     let hash_input = byte_string::string_to_u8_array(&format!("{}{}{}", pre_nonce, nonce, post_nonce));
-    let version = if pre_nonce.starts_with("0707") {
+    let version = if pre_nonce.starts_with("0707") || true {
+      // TODO eventually need a more permanent approach to detecting versions, unfortunately there
+      // are some version mismatches in the headers (07 flags the first hard fork for aeon and
+      // monero, whereas 04 for turtlecoin).  Probably just want to have currency+version specified
+      // in the config.
       hash::HashVersion::Version7
     }
     else {
